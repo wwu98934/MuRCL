@@ -350,7 +350,6 @@ def run(args):
         args.save_dir = str(Path(args.base_save_dir) / args.save_dir)
     args.save_dir = increment_path(Path(args.save_dir), exist_ok=args.exist_ok, sep='_')  # increment run
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
-    # print(args.save_dir)
 
     if not args.device == 'cpu':
         os.environ['CUDA_VISIBLE_DEVICES'] = str(args.device)
@@ -364,16 +363,16 @@ def run(args):
     args.eval_step = int(args.num_data / args.batch_size)
     print(f"train_length: {train_length}, epoch_step: {args.num_data}, eval_step: {args.eval_step}")
 
-    # Save arguments
-    with open(Path(args.save_dir) / 'args.yaml', 'w') as fp:
-        yaml.dump(vars(args), fp, sort_keys=False)
-    print(args, '\n')
-
     # Model, Criterion, Optimizer and Scheduler
     model, fc, ppo = create_model(args, dim_patch)
     criterion = NT_Xent(args.batch_size, args.temperature)
     optimizer = get_optimizer(args, model, fc)
     scheduler = get_scheduler(args, optimizer)
+
+    # Save arguments
+    with open(Path(args.save_dir) / 'args.yaml', 'w') as fp:
+        yaml.dump(vars(args), fp, sort_keys=False)
+    print(args, '\n')
 
     # TensorBoard
     tb_writer = SummaryWriter(args.save_dir) if args.use_tensorboard else None

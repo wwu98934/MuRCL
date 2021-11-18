@@ -6,9 +6,6 @@ import pandas as pd
 from tqdm import tqdm
 from pathlib import Path
 
-import nni
-from nni.utils import merge_parameter
-
 import torch
 import torch.nn.functional as F
 from torch import nn, optim
@@ -25,9 +22,9 @@ def create_save_dir(args):
     dir2 = f'RLMIL'
     rlmil_setting = [
         f'T{args.T}',
-        f'phd{args.policy_hidden_dim}',
         f'as{args.action_std}',
         f'pg{args.ppo_gamma}',
+        f'phd{args.policy_hidden_dim}',
         f'fhd{args.fc_hidden_dim}',
     ]
     dir3 = '_'.join(rlmil_setting)
@@ -91,14 +88,7 @@ def get_datasets(args):
 def create_model(args, dim_patch):
     print(f"Creating model {args.arch}...")
     if args.arch == 'ABMIL':
-        model = rlmil.ABMIL(
-            dim_in=dim_patch,
-            L=args.L,
-            D=args.D,
-            dim_out=args.num_classes,
-            dropout=args.dropout,
-        )
-        model_prime = rlmil.ABMIL(
+        model = abmil.ABMIL(
             dim_in=dim_patch,
             L=args.L,
             D=args.D,
@@ -107,20 +97,10 @@ def create_model(args, dim_patch):
         )
         args.feature_num = args.L
     elif args.arch == 'DSMIL':
-        model = rlmil.build_dsmil(dim_feat=dim_patch, num_classes=args.num_classes)
-        model_prime = rlmil.build_dsmil(dim_feat=dim_patch, num_classes=args.num_classes)
+        model = dsmil.build_dsmil(dim_feat=dim_patch, num_classes=args.num_classes)
         args.feature_num = dim_patch
     elif args.arch == 'CLAM_SB':
-        model = rlmil.CLAM_SB(
-            gate=True,
-            size_arg=args.size_arg,
-            dropout=True,
-            k_sample=args.k_sample,
-            n_classes=args.num_classes,
-            subtyping=True,
-            in_dim=dim_patch
-        )
-        model_prime = rlmil.CLAM_SB(
+        model = clam.CLAM_SB(
             gate=True,
             size_arg=args.size_arg,
             dropout=True,
@@ -137,34 +117,24 @@ def create_model(args, dim_patch):
 
     if args.train_method in ['finetune', 'linear']:
         if args.train_stage == 1:
-            assert args.checkpoint is not None and Path(args.checkpoint).exists(), f"{args.checkpoint} is not exists!"
+            assert args.checkpoint_pretrained is not None and Path(
+                args.checkpoint).exists(), f"{args.checkpoint} is not exists!"
 
             checkpoint = torch.load(args.checkpoint)
             model_state_dict = checkpoint['model_state_dict']
-            model_prime_state_dict = checkpoint['model_prime_state_dict']
-            fc_state_dict = checkpoint['fc']
-            for k in list(model_state_dict.keys()):
-                print(f"key: {k}")
+            # for k in list(model_state_dict.keys()):
+            #     print(f"key: {k}")
             for k in list(model_state_dict.keys()):
                 if k.startswith('encoder') and not k.startswith('encoder.fc') and not k.startswith(
                         'encoder.classifiers'):
                     model_state_dict[k[len('encoder.'):]] = model_state_dict[k]
                 del model_state_dict[k]
-            for k in list(model_prime_state_dict.keys()):
-                if k.startswith('encoder') and not k.startswith('encoder.fc') and not k.startswith(
-                        'encoder.classifiers'):
-                    model_prime_state_dict[k[len('encoder.'):]] = model_prime_state_dict[k]
-                del model_prime_state_dict[k]
-            for k in list(model_state_dict.keys()):
-                print(f"key: {k}")
+            # for k in list(model_state_dict.keys()):
+            #     print(f"key: {k}")
             msg_model = model.load_state_dict(model_state_dict, strict=False)
-            msg_model_prime = model_prime.load_state_dict(model_prime_state_dict, strict=False)
-            if args.load_fc:
-                msg_fc = fc.load_state_dict(fc_state_dict, strict=False)
-                print(f"msg_fc missing_keys: {msg_fc.missing_keys}")
             print(f"msg_model missing_keys: {msg_model.missing_keys}")
-            print(f"msg_model_prime missing_keys: {msg_model_prime.missing_keys}")
 
+            # fix the parameters of  mil encoder
             if args.train_method == 'linear':
                 for n, p in model.named_parameters():
                     # print(f"key: {n}")
@@ -172,41 +142,20 @@ def create_model(args, dim_patch):
                         print(f"not_fixed_key: {n}")
                     else:
                         p.requires_grad = False
-                for n, p in model_prime.named_parameters():
-                    # print(f"key: {n}")
-                    if n.startswith('fc') or n.startswith('classifiers') or n.startswith('instance_classifiers'):
-                        print(f"not_fixed_key: {n}")
-                    else:
-                        p.requires_grad = False
-
-            if args.arch == 'ABMIL':
-                dim_in = model.fc.in_features
-                model.fc = torch.nn.Linear(dim_in, args.num_classes)
-                dim_in = model_prime.fc.in_features
-                model_prime.fc = torch.nn.Linear(dim_in, args.num_classes)
-            elif args.arch == 'CLAM_SB':
-                dim_in = model.classifiers.in_features
-                model.classifiers = torch.nn.Linear(dim_in, args.num_classes)
-                dim_in = model_prime.classifiers.in_features
-                model_prime.classifiers = torch.nn.Linear(dim_in, args.num_classes)
-            else:
-                raise NotImplementedError
 
         elif args.train_stage == 2:
-            if args.checkpoint_path is None:
-                args.checkpoint_path = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
-            assert Path(args.checkpoint_path).exists(), f"{args.checkpoint_path} is not exist!"
-            # assert Path(args.checkpoint_path).parent.parent == Path(args.save_dir).parent
-            assert Path(args.checkpoint_path).parent.stem == 'stage_1'
+            if args.checkpoint_stage is None:
+                args.checkpoint_stage = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
+            assert Path(args.checkpoint_stage).exists(), f"{args.checkpoint_stage} is not exist!"
 
-            checkpoint = torch.load(args.checkpoint_path)
+            checkpoint = torch.load(args.checkpoint_stage)
             model.load_state_dict(checkpoint['model_state_dict'])
-            model_prime.load_state_dict(checkpoint['model_prime_state_dict'])
             fc.load_state_dict(checkpoint['fc'])
 
-            assert args.checkpoint is not None and Path(args.checkpoint).exists(), f"{args.checkpoint} is not exists!"
-            checkpoint = torch.load(args.checkpoint)
-            state_dim = args.L
+            assert args.checkpoint_pretrained is not None and Path(
+                args.checkpoint_pretrained).exists(), f"{args.checkpoint_pretrained} is not exists!"
+            checkpoint = torch.load(args.checkpoint_pretrained)
+            state_dim = args.model_dim
             ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                             action_std=args.action_std,
                             lr=args.ppo_lr,
@@ -217,18 +166,15 @@ def create_model(args, dim_patch):
             ppo.policy_old.load_state_dict(checkpoint['policy'])
 
         elif args.train_stage == 3:
-            if args.checkpoint_path is None:
-                args.checkpoint_path = str(Path(args.save_dir).parent / 'stage_2' / 'model_best.pth.tar')
-            assert Path(args.checkpoint_path).exists(), f"{args.checkpoint_path} is not exist!"
-            # assert Path(args.checkpoint_path).parent.parent == Path(args.save_dir).parent
-            assert Path(args.checkpoint_path).parent.stem == 'stage_2'
+            if args.checkpoint_stage is None:
+                args.checkpoint_stage = str(Path(args.save_dir).parent / 'stage_2' / 'model_best.pth.tar')
+            assert Path(args.checkpoint_stage).exists(), f"{args.checkpoint_stage} is not exist!"
 
-            checkpoint = torch.load(args.checkpoint_path)
+            checkpoint = torch.load(args.checkpoint_stage)
             model.load_state_dict(checkpoint['model_state_dict'])
-            model_prime.load_state_dict(checkpoint['model_prime_state_dict'])
             fc.load_state_dict(checkpoint['fc'])
 
-            state_dim = args.L
+            state_dim = args.model_dim
             ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                             action_std=args.action_std,
                             lr=args.ppo_lr,
@@ -245,36 +191,21 @@ def create_model(args, dim_patch):
                         print(f"not_fixed_key: {n}")
                     else:
                         p.requires_grad = False
-                for n, p in model_prime.named_parameters():
-                    # print(f"key: {n}")
-                    if n.startswith('fc') or n.startswith('classifiers') or n.startswith('instance_classifiers'):
-                        print(f"not_fixed_key: {n}")
-                    else:
-                        p.requires_grad = False
-
-            # dim_in = model.fc.in_features
-            # model.fc = torch.nn.Linear(dim_in, args.num_classes)
-            # dim_in = model_prime.fc.in_features
-            # model_prime.fc = torch.nn.Linear(dim_in, args.num_classes)
         else:
             raise ValueError
     elif args.train_method in ['scratch']:
         if args.train_stage == 1:
             pass
         elif args.train_stage == 2:
-            if args.checkpoint_path is None:
-                args.checkpoint_path = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
+            if args.checkpoint_stage is None:
+                args.checkpoint_stage = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
             assert Path(args.checkpoint_path).exists(), f"{args.checkpoint_path} is not exist!"
-            # assert Path(args.checkpoint_path).parent.parent == Path(
-            #     args.save_dir).parent, f"checkpoint_path:\n{args.checkpoint_path}\nsave_dir:\n{args.save_dir}"
-            assert Path(args.checkpoint_path).parent.stem == 'stage_1'
 
             checkpoint = torch.load(args.checkpoint_path)
             model.load_state_dict(checkpoint['model_state_dict'])
-            model_prime.load_state_dict(checkpoint['model_prime_state_dict'])
             fc.load_state_dict(checkpoint['fc'])
 
-            state_dim = args.L
+            state_dim = args.model_dim
             ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                             action_std=args.action_std,
                             lr=args.ppo_lr,
@@ -282,19 +213,15 @@ def create_model(args, dim_patch):
                             K_epochs=args.K_epochs,
                             action_size=args.num_clusters)
         elif args.train_stage == 3:
-            if args.checkpoint_path is None:
-                args.checkpoint_path = str(Path(args.save_dir).parent / 'stage_2' / 'model_best.pth.tar')
-            assert Path(args.checkpoint_path).exists(), f'{str(args.checkpoint_path)} is not exists!'
-            # assert Path(args.checkpoint_path).parent.parent == Path(
-            #     args.save_dir).parent, f"checkpoint_path:\n{args.checkpoint_path}\nsave_dir:\n{args.save_dir}"
-            assert Path(args.checkpoint_path).parent.stem == 'stage_2'
+            if args.checkpoint_stage is None:
+                args.checkpoint_stage = str(Path(args.save_dir).parent / 'stage_2' / 'model_best.pth.tar')
+            assert Path(args.checkpoint_stage).exists(), f'{str(args.checkpoint_stage)} is not exists!'
 
-            checkpoint = torch.load(args.checkpoint_path)
+            checkpoint = torch.load(args.checkpoint_stage)
             model.load_state_dict(checkpoint['model_state_dict'])
-            model_prime.load_state_dict(checkpoint['model_prime_state_dict'])
             fc.load_state_dict(checkpoint['fc'])
 
-            state_dim = args.L
+            state_dim = args.model_dim
             ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                             action_std=args.action_std,
                             lr=args.ppo_lr,
@@ -309,14 +236,12 @@ def create_model(args, dim_patch):
         raise ValueError
 
     model = torch.nn.DataParallel(model).cuda()
-    model_prime = torch.nn.DataParallel(model_prime).cuda()
     fc = fc.cuda()
 
     assert model is not None, "creating model failed. "
     print(f"model Total params: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
-    print(f"model_prime Total params: {sum(p.numel() for p in model_prime.parameters()) / 1e6:.2f}M")
     print(f"fc Total params: {sum(p.numel() for p in fc.parameters()) / 1e6:.2f}M")
-    return model, model_prime, fc, ppo
+    return model, fc, ppo
 
 
 def get_criterion(args):
@@ -327,15 +252,10 @@ def get_criterion(args):
     return criterion
 
 
-def get_optimizer(args, model, model_prime, fc):
+def get_optimizer(args, model, fc):
     if args.train_stage != 2:
-        if args.train_model_prime:
-            params = [{'params': model.parameters(), 'lr': args.backbone_lr},
-                      {'params': model_prime.parameters(), 'lr': args.backbone_lr},
-                      {'params': fc.parameters(), 'lr': args.fc_lr}]
-        else:
-            params = [{'params': model.parameters(), 'lr': args.backbone_lr},
-                      {'params': fc.parameters(), 'lr': args.fc_lr}]
+        params = [{'params': model.parameters(), 'lr': args.backbone_lr},
+                  {'params': fc.parameters(), 'lr': args.fc_lr}]
         if args.optimizer == 'SGD':
             optimizer = torch.optim.SGD(params,
                                         lr=0,  # specify in params
@@ -348,7 +268,7 @@ def get_optimizer(args, model, model_prime, fc):
             raise NotImplementedError
     else:
         optimizer = None
-        args.epochs = 10
+        args.epochs = args.ppo_epochs
     return optimizer
 
 
@@ -362,31 +282,14 @@ def get_scheduler(args, optimizer):
     elif args.scheduler is None:
         scheduler = None
     else:
-        raise ValueError("Optimizer not found. Accepted 'Adam', 'SGD' or 'RMSprop'")
+        raise ValueError
     return scheduler
 
 
 # Train Model Functions ------------------------------------------------------------------------------------------------
-
-def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, criterion, optimizer, scheduler):
-    """
-    一个epoch
-    :param args:
-    :param epoch:
-    :param train_set:
-    :param model: local
-    :param model_prime:
-    :param fc:
-    :param ppo:
-    :param memory:
-    :param criterion:
-    :param optimizer:
-    :param scheduler:
-    :return:
-    """
+def train_CLAM(args, epoch, train_set, model, fc, ppo, memory, criterion, optimizer, scheduler):
     print(f"train_CLAM...")
     length = len(train_set)
-    print(f"data length: {length}")
     train_set.shuffle()
 
     losses = [AverageMeter() for _ in range(args.T)]
@@ -394,29 +297,18 @@ def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, crit
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
 
     if args.train_stage == 2:
-        model_prime.eval()
         model.eval()
         fc.eval()
     else:
-        if args.train_model_prime:
-            model_prime.train()
-        else:
-            model_prime.eval()
         model.train()
         fc.train()
-
-    dsn_fc_prime = model_prime.module.classifiers
-    # print(f"dsn_fc_prime: {dsn_fc_prime}")
-    dsn_fc = model.module.classifiers
-    # print(f"dsn_fc: {dsn_fc}")
 
     progress_bar = tqdm(range(args.num_data))
     feat_list, cluster_list, label_list, step = [], [], [], 0
     batch_idx = 0
     labels_list, outputs_list = [], []
     for data_idx in progress_bar:
-        loss_cla = []
-        loss_list_dsn = []
+        loss_list = []
 
         feat, cluster, label, case_id = train_set[data_idx % length]
         assert len(feat.shape) == 2, f"{feat.shape}"
@@ -432,30 +324,21 @@ def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, crit
             labels = torch.cat(label_list)
             action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
             feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-            if args.mix_up:
-                feats = mixup(feats, args.alpha)[0]
-            if args.train_model_prime and args.train_stage != 2:
-                outputs, states, result_dict = model_prime(feats, label=labels, instance_eval=True)
-                outputs_dsn = dsn_fc_prime(outputs)
+
+            if args.train_stage != 2:
+                outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
                 outputs = fc(outputs, restart=True)
             else:
                 with torch.no_grad():
-                    outputs, states, result_dict = model_prime(feats, label=labels, instance_eval=True)
-                    outputs_dsn = dsn_fc_prime(outputs)
+                    outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
                     outputs = fc(outputs, restart=True)
 
-            loss_prime = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * result_dict[
-                'instance_loss']
-            # print(f"loss_prime: {loss_prime}")
-            loss_cla.append(loss_prime)
+            loss = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * result_dict['instance_loss']
+            loss_list.append(loss)
 
-            loss_dsn = args.bag_weight * criterion(outputs_dsn, labels) + (1 - args.bag_weight) * result_dict[
-                'instance_loss']
-            loss_list_dsn.append(loss_dsn)
-
-            losses[0].update(loss_prime.data.item(), outputs.shape[0])
+            losses[0].update(loss.data.item(), len(feat_list))
             acc = accuracy(outputs, labels, topk=(1,))[0]
-            top1[0].update(acc.item())
+            top1[0].update(acc.item(), len(feat_list))
 
             # RL
             confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
@@ -467,43 +350,31 @@ def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, crit
                         action_sequence = ppo.select_action(states.to(0), memory, restart_batch=True)
                     else:
                         action_sequence = ppo.select_action(states.to(0), memory)
-
                 feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-                if args.mix_up:
-                    feats = mixup(feats, args.alpha)[0]
 
                 if args.train_stage != 2:
                     outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
-                    outputs_dsn = dsn_fc(outputs)
                     outputs = fc(outputs, restart=False)
                 else:
                     with torch.no_grad():
                         outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
-                        outputs_dsn = dsn_fc(outputs)
                         outputs = fc(outputs, restart=False)
                 loss = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * result_dict[
                     'instance_loss']
-                loss_cla.append(loss)
+                loss_list.append(loss)
                 losses[patch_step].update(loss.data.item(), len(feat_list))
 
-                loss_dsn = args.bag_weight * criterion(outputs_dsn, labels) + (1 - args.bag_weight) * result_dict[
-                    'instance_loss']
-                loss_list_dsn.append(loss_dsn)
-
                 acc = accuracy(outputs, labels, topk=(1,))[0]
-                top1[patch_step].update(acc.item())
+                top1[patch_step].update(acc.item(), len(feat_list))
 
-                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
-                                                                                                                -1)
+                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
                 reward = confidence - confidence_last
                 confidence_last = confidence
 
                 reward_list[patch_step - 1].update(reward.data.mean(), len(feat_list))
                 memory.rewards.append(reward)
 
-            # print(f"loss_cla:\n{loss_cla}")
-            # print(f"loss_list_dsn:\n{loss_list_dsn}")
-            loss = (sum(loss_cla) + args.dsn_ratio * sum(loss_list_dsn)) / args.T
+            loss = sum(loss_list) / args.T
             if args.train_stage != 2:
                 optimizer.zero_grad()
                 loss.backward()
@@ -513,6 +384,7 @@ def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, crit
             memory.clear_memory()
             torch.cuda.empty_cache()
 
+            # save the last outputs
             labels_list.append(labels.detach())
             outputs_list.append(outputs.detach())
 
@@ -524,47 +396,26 @@ def train_CLAM(args, epoch, train_set, model, model_prime, fc, ppo, memory, crit
             )
             progress_bar.update()
 
-            # _acc = [acc.avg for acc in top1]
-            # print('accuracy of each step:')
-            # print(_acc)
-
-            # _reward = [reward.avg for reward in reward_list]
-            # print('reward of each step:')
-            # print(_reward)
-
     progress_bar.close()
-    if args.train_stage != 2 and scheduler is not None and epoch >= args.warmup:
+    if scheduler is not None and epoch >= args.warmup:
         scheduler.step()
 
     labels = torch.cat(labels_list)
     outputs = torch.cat(outputs_list)
     acc, auc, precision, recall, f1_score = get_metrics(outputs, labels)
-    # predict = torch.softmax(outputs, dim=1)
-    # auc = roc_auc_score(labels.cpu().numpy(), predict[:, 1].cpu().numpy())
 
     return losses[-1].avg, acc, auc, precision, recall, f1_score
 
 
-def test_CLAM(args, test_set, model, model_prime, fc, ppo, memory, criterion, mode):
+def test_CLAM(args, test_set, model, fc, ppo, memory, criterion):
     losses = [AverageMeter() for _ in range(args.T)]
-    # top1 = [AverageMeter() for _ in range(args.T)]
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
-    model_prime.eval()
+
     model.eval()
     fc.eval()
-    dsn_fc_prime = model_prime.module.classifiers
-    dsn_fc = model.module.classifiers
-    # acc_list, auc_list = [], []
     with torch.no_grad():
-
-        # progress_bar = tqdm(test_set)
         feat_list, cluster_list, label_list, case_id_list, step = [], [], [], [], 0
-        # batch_idx = 0
-        # labels_list, outputs_list = [], []
         for data_idx, (feat, cluster, label, case_id) in enumerate(test_set):
-            loss_cla = []
-            loss_list_dsn = []
-
             feat = feat.unsqueeze(0).to(args.device)
             label = label.unsqueeze(0).to(args.device)
             feat_list.append(feat)
@@ -572,35 +423,21 @@ def test_CLAM(args, test_set, model, model_prime, fc, ppo, memory, criterion, mo
             label_list.append(label)
             case_id_list.append(case_id)
 
+        loss_list = []
+
         labels = torch.cat(label_list)
         action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
         feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-        # if args.mix_up:
-        #     feats = mixup(feats, args.alpha)[0]
 
-        outputs, states, result_dict = model_prime(feats, label=labels, instance_eval=True)
-        outputs_dsn = dsn_fc_prime(outputs)
+        outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
         outputs = fc(outputs, restart=True)
 
         ins_loss = 0
         for r in result_dict:
             ins_loss = ins_loss + r['instance_loss']
         ins_loss = ins_loss / len(feat_list)
-        loss_prime = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * ins_loss
-        loss_cla.append(loss_prime)
-
-        loss_dsn = args.bag_weight * criterion(outputs_dsn, labels) + (1 - args.bag_weight) * ins_loss
-        loss_list_dsn.append(loss_dsn)
-
-        losses[0].update(loss_prime.data.item(), outputs.shape[0])
-        # acc, auc = acc_auc(outputs, labels)
-        # acc_list.append(acc)
-        # auc_list.append(auc)
-        # losses[0].update(loss_dsn.data.item(), outputs.shape[0])
-        # acc = accuracy(outputs, labels, topk=(1,))[0]
-        # acc = accuracy(outputs_dsn, labels, topk=(1,))[0]
-        # top1[0].update(acc.item())
-        # print_outputs(outputs, labels, case_id_list)
+        loss = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * ins_loss
+        loss_list.append(loss)
 
         confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
         for patch_step in range(1, args.T):
@@ -613,10 +450,7 @@ def test_CLAM(args, test_set, model, model_prime, fc, ppo, memory, criterion, mo
                     action = ppo.select_action(states.to(0), memory)
 
             feats = get_feats(feat_list, cluster_list, action_sequence=action, feat_size=args.feat_size)
-            # if args.mix_up:
-            #     feats = mixup(feats, args.alpha)[0]
             outputs, states, result_dict = model(feats, label=labels, instance_eval=True)
-            outputs_dsn = dsn_fc(outputs)
             outputs = fc(outputs, restart=False)
 
             ins_loss = 0
@@ -624,20 +458,10 @@ def test_CLAM(args, test_set, model, model_prime, fc, ppo, memory, criterion, mo
                 ins_loss = ins_loss + r['instance_loss']
             ins_loss = ins_loss / len(feat_list)
             loss = args.bag_weight * criterion(outputs, labels) + (1 - args.bag_weight) * ins_loss
-            loss_cla.append(loss)
+            loss_list.append(loss)
             losses[patch_step].update(loss.data.item(), len(feat_list))
 
-            loss_dsn = args.bag_weight * criterion(outputs_dsn, labels) + (1 - args.bag_weight) * ins_loss
-            loss_list_dsn.append(loss_dsn)
-
-            # acc, auc = acc_auc(outputs, labels)
-            # acc_list.append(acc)
-            # auc_list.append(auc)
-            # acc = accuracy(outputs, labels, topk=(1,))[0]
-            # top1[patch_step].update(acc.item())
-
-            confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
-                                                                                                            -1)
+            confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
             reward = confidence - confidence_last
             confidence_last = confidence
 
@@ -645,15 +469,12 @@ def test_CLAM(args, test_set, model, model_prime, fc, ppo, memory, criterion, mo
             memory.rewards.append(reward)
         memory.clear_memory()
         acc, auc, precision, recall, f1_score = get_metrics(outputs, labels)
-
     return losses[-1].avg, acc, auc, precision, recall, f1_score, outputs, labels, case_id_list
 
 
-def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, criterion, optimizer, scheduler):
+def train_DSMIL(args, epoch, train_set, model, fc, ppo, memory, criterion, optimizer, scheduler):
     print(f"train_DSMIL...")
-    assert args.batch_size == 1
     length = len(train_set)
-    print(f"data length: {length}")
     train_set.shuffle()
 
     losses = [AverageMeter() for _ in range(args.T)]
@@ -661,29 +482,18 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
 
     if args.train_stage == 2:
-        model_prime.eval()
         model.eval()
         fc.eval()
     else:
-        if args.train_model_prime:
-            model_prime.train()
-        else:
-            model_prime.eval()
         model.train()
         fc.train()
-
-    dsn_fc_prime = model_prime.module.b_classifier.fcc
-    # print(f"dsn_fc_prime: {dsn_fc_prime}")
-    dsn_fc = model.module.b_classifier.fcc
-    # print(f"dsn_fc: {dsn_fc}")
 
     progress_bar = tqdm(range(args.num_data))
     feat_list, cluster_list, label_list, step = [], [], [], 0
     batch_idx = 0
     labels_list, outputs_list = [], []
     for data_idx in progress_bar:
-        loss_cla = []
-        loss_list_dsn = []
+        loss_list = []
 
         feat, cluster, label, case_id = train_set[data_idx % length]
         assert len(feat.shape) == 2, f"{feat.shape}"
@@ -699,38 +509,29 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
             labels = torch.cat(label_list)
             action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
             feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-            # print(f"feats.shape: {feats.shape}")
-            if args.mix_up:
-                feats = mixup(feats, args.alpha)[0]
-            if args.train_model_prime and args.train_stage != 2:
-                outputs_ins, outputs, states = model_prime(feats)
+
+            if args.train_stage != 2:
+                outputs_ins, outputs, states = model(feats)
                 states = torch.mean(states, dim=1)
-                # print(outputs_ins.shape)
                 outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-                # print(f"outputs_max: {outputs_max.shape}")
-                outputs_dsn = dsn_fc_prime(outputs).view(1, -1)
                 outputs = torch.mean(outputs, dim=1)
                 outputs = fc(outputs, restart=True)
             else:
                 with torch.no_grad():
-                    outputs_ins, outputs, states = model_prime(feats)
+                    outputs_ins, outputs, states = model(feats)
                     states = torch.mean(states, dim=1)
                     outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-                    outputs_dsn = dsn_fc_prime(outputs).view(1, -1)
                     outputs = torch.mean(outputs, dim=1)
                     outputs = fc(outputs, restart=True)
 
             loss_max = criterion(outputs_max, labels)
 
-            loss_prime = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
-            loss_cla.append(loss_prime)
+            loss = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
+            loss_list.append(loss)
 
-            loss_dsn = 0.5 * criterion(outputs_dsn, labels) + 0.5 * loss_max
-            loss_list_dsn.append(loss_dsn)
-
-            losses[0].update(loss_prime.data.item(), outputs.shape[0])
+            losses[0].update(loss.data.item(), len(feat_list))
             acc = accuracy(outputs, labels, topk=(1,))[0]
-            top1[0].update(acc.item(), outputs.shape[0])
+            top1[0].update(acc.item(), len(feat_list))
 
             # RL
             confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
@@ -742,16 +543,12 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
                         action_sequence = ppo.select_action(states.to(0), memory, restart_batch=True)
                     else:
                         action_sequence = ppo.select_action(states.to(0), memory)
-
                 feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-                if args.mix_up:
-                    feats = mixup(feats, args.alpha)[0]
 
                 if args.train_stage != 2:
                     outputs_ins, outputs, states = model(feats)
                     states = torch.mean(states, dim=1)
                     outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-                    outputs_dsn = dsn_fc(outputs).view(1, -1)
                     outputs = torch.mean(outputs, dim=1)
                     outputs = fc(outputs, restart=False)
                 else:
@@ -759,32 +556,24 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
                         outputs_ins, outputs, states = model(feats)
                         states = torch.mean(states, dim=1)
                         outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-                        outputs_dsn = dsn_fc(outputs).view(1, -1)
                         outputs = torch.mean(outputs, dim=1)
                         outputs = fc(outputs, restart=False)
                 loss_max = criterion(outputs_max, labels)
 
                 loss = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
-                loss_cla.append(loss)
+                loss_list.append(loss)
                 losses[patch_step].update(loss.data.item(), len(feat_list))
-
-                loss_dsn = 0.5 * criterion(outputs_dsn, labels) + 0.5 * loss_max
-                loss_list_dsn.append(loss_dsn)
-
                 acc = accuracy(outputs, labels, topk=(1,))[0]
                 top1[patch_step].update(acc.item(), outputs.shape[0])
 
-                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
-                                                                                                                -1)
+                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
                 reward = confidence - confidence_last
                 confidence_last = confidence
 
                 reward_list[patch_step - 1].update(reward.data.mean(), len(feat_list))
                 memory.rewards.append(reward)
 
-            # print(f"loss_cla:\n{loss_cla}")
-            # print(f"loss_list_dsn:\n{loss_list_dsn}")
-            loss = (sum(loss_cla) + args.dsn_ratio * sum(loss_list_dsn)) / args.T
+            loss = sum(loss_list) / args.T
             if args.train_stage != 2:
                 optimizer.zero_grad()
                 loss.backward()
@@ -805,14 +594,6 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
             )
             progress_bar.update()
 
-            # _acc = [acc.avg for acc in top1]
-            # print('accuracy of each step:')
-            # print(_acc)
-
-            # _reward = [reward.avg for reward in reward_list]
-            # print('reward of each step:')
-            # print(_reward)
-
     progress_bar.close()
     if args.train_stage != 2 and scheduler is not None and epoch >= args.warmup:
         scheduler.step()
@@ -823,26 +604,15 @@ def train_DSMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
     return losses[-1].avg, acc, auc, precision, recall, f1_score
 
 
-def test_DSMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, mode):
+def test_DSMIL(args, test_set, model, fc, ppo, memory, criterion):
     losses = [AverageMeter() for _ in range(args.T)]
-    # top1 = [AverageMeter() for _ in range(args.T)]
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
-    model_prime.eval()
+
     model.eval()
     fc.eval()
-    dsn_fc_prime = model_prime.module.b_classifier.fcc
-    dsn_fc = model.module.b_classifier.fcc
-    acc_list, auc_list = [], []
     with torch.no_grad():
-
-        # progress_bar = tqdm(test_set)
         feat_list, cluster_list, label_list, case_id_list, step = [], [], [], [], 0
-        # batch_idx = 0
-        # labels_list, outputs_list = [], []
         for data_idx, (feat, cluster, label, case_id) in enumerate(test_set):
-            loss_cla = []
-            loss_list_dsn = []
-
             feat = feat.unsqueeze(0).to(args.device)
             label = label.unsqueeze(0).to(args.device)
             feat_list.append(feat)
@@ -850,46 +620,26 @@ def test_DSMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
             label_list.append(label)
             case_id_list.append(case_id)
 
+        loss_list = []
         labels = torch.cat(label_list)
         action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
         feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-        # if args.mix_up:
-        #     feats = mixup(feats, args.alpha)[0]
-
-        # print(f"feats.shape: {feats.shape}")
-        outputs_ins, outputs, states = model_prime(feats)
+        outputs_ins, outputs, states = model(feats)
         states = torch.mean(states, dim=1)
-        # print(f"outputs_ins.shape: {outputs_ins.shape}")
-        # print(f"outputs.shape: {outputs.shape}")
-        # print(f"states.shape: {states.shape}")
         outputs_max = []
         for ins in outputs_ins:
             m_ins, _ = torch.max(ins, 0, keepdim=True)
             outputs_max.append(m_ins)
         outputs_max = torch.cat(outputs_max)
-        # print(f"outputs_max.shape: {outputs_max.shape}")
-        # outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-        outputs_dsn = dsn_fc_prime(outputs).view(len(feat_list), -1)
         outputs = torch.mean(outputs, dim=1)
         outputs = fc(outputs, restart=True)
 
         loss_max = criterion(outputs_max, labels)
 
-        loss_prime = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
-        loss_cla.append(loss_prime)
+        loss = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
+        loss_list.append(loss)
 
-        loss_dsn = 0.5 * criterion(outputs_dsn, labels) + 0.5 * loss_max
-        loss_list_dsn.append(loss_dsn)
-
-        losses[0].update(loss_prime.data.item(), outputs.shape[0])
-        # acc, auc = acc_auc(outputs, labels)
-        # acc_list.append(acc)
-        # auc_list.append(auc)
-        # losses[0].update(loss_dsn.data.item(), outputs.shape[0])
-        # acc = accuracy(outputs, labels, topk=(1,))[0]
-        # acc = accuracy(outputs_dsn, labels, topk=(1,))[0]
-        # top1[0].update(acc.item())
-        # print_outputs(outputs, labels, case_id_list)
+        losses[0].update(loss.data.item(), outputs.shape[0])
 
         confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
         for patch_step in range(1, args.T):
@@ -902,8 +652,6 @@ def test_DSMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
                     action = ppo.select_action(states.to(0), memory)
 
             feats = get_feats(feat_list, cluster_list, action_sequence=action, feat_size=args.feat_size)
-            # if args.mix_up:
-            #     feats = mixup(feats, args.alpha)[0]
             outputs_ins, outputs, states = model(feats)
             states = torch.mean(states, dim=1)
             outputs_max = []
@@ -911,28 +659,16 @@ def test_DSMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
                 m_ins, _ = torch.max(ins, 0, keepdim=True)
                 outputs_max.append(m_ins)
             outputs_max = torch.cat(outputs_max)
-            # outputs_max, _ = torch.max(outputs_ins, 0, keepdim=True)
-            outputs_dsn = dsn_fc(outputs).view(len(feat_list), -1)
             outputs = torch.mean(outputs, dim=1)
             outputs = fc(outputs, restart=False)
 
             loss_max = criterion(outputs_max, labels)
 
             loss = 0.5 * criterion(outputs, labels) + 0.5 * loss_max
-            loss_cla.append(loss)
+            loss_list.append(loss)
             losses[patch_step].update(loss.data.item(), len(feat_list))
 
-            loss_dsn = 0.5 * criterion(outputs_dsn, labels) + 0.5 * loss_max
-            loss_list_dsn.append(loss_dsn)
-
-            # acc, auc = acc_auc(outputs, labels)
-            # acc_list.append(acc)
-            # auc_list.append(auc)
-            # acc = accuracy(outputs, labels, topk=(1,))[0]
-            # top1[patch_step].update(acc.item())
-
-            confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
-                                                                                                            -1)
+            confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
             reward = confidence - confidence_last
             confidence_last = confidence
 
@@ -943,10 +679,9 @@ def test_DSMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
     return losses[-1].avg, acc, auc, precision, recall, f1_score, outputs, labels, case_id_list
 
 
-def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, criterion, optimizer, scheduler):
+def train_ABMIL(args, epoch, train_set, model, fc, ppo, memory, criterion, optimizer, scheduler):
     print(f"train_ABMIL...")
     length = len(train_set)
-    print(f"data length: {length}")
     train_set.shuffle()
 
     losses = [AverageMeter() for _ in range(args.T)]
@@ -954,29 +689,18 @@ def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
 
     if args.train_stage == 2:
-        model_prime.eval()
         model.eval()
         fc.eval()
     else:
-        if args.train_model_prime:
-            model_prime.train()
-        else:
-            model_prime.eval()
         model.train()
         fc.train()
-
-    dsn_fc_prime = model_prime.module.fc
-    # print(f"dsn_fc_prime: {dsn_fc_prime}")
-    dsn_fc = model.module.fc
-    # print(f"dsn_fc: {dsn_fc}")
 
     progress_bar = tqdm(range(args.num_data))
     feat_list, cluster_list, label_list, step = [], [], [], 0
     batch_idx = 0
     labels_list, outputs_list = [], []
     for data_idx in progress_bar:
-        loss_cla = []
-        loss_list_dsn = []
+        loss_list = []
 
         feat, cluster, label, case_id = train_set[data_idx % length]
         assert len(feat.shape) == 2, f"{feat.shape}"
@@ -992,28 +716,20 @@ def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
             labels = torch.cat(label_list)
             action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
             feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-            if args.mix_up:
-                feats = mixup(feats, args.alpha)[0]
             if args.train_model_prime and args.train_stage != 2:
-                outputs, states = model_prime(feats)
-                outputs_dsn = dsn_fc_prime(outputs)
+                outputs, states = model(feats)
                 outputs = fc(outputs, restart=True)
             else:
                 with torch.no_grad():
-                    outputs, states = model_prime(feats)
-                    outputs_dsn = dsn_fc_prime(outputs)
+                    outputs, states = model(feats)
                     outputs = fc(outputs, restart=True)
 
-            loss_prime = criterion(outputs, labels)
-            # print(f"loss_prime: {loss_prime}")
-            loss_cla.append(loss_prime)
+            loss = criterion(outputs, labels)
+            loss_list.append(loss)
 
-            loss_dsn = criterion(outputs_dsn, labels)
-            loss_list_dsn.append(loss_dsn)
-
-            losses[0].update(loss_prime.data.item(), outputs.shape[0])
+            losses[0].update(loss.data.item(), len(feat_list))
             acc = accuracy(outputs, labels, topk=(1,))[0]
-            top1[0].update(acc.item())
+            top1[0].update(acc.item(), len(feat_list))
 
             # RL
             confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
@@ -1025,41 +741,30 @@ def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
                         action_sequence = ppo.select_action(states.to(0), memory, restart_batch=True)
                     else:
                         action_sequence = ppo.select_action(states.to(0), memory)
-
                 feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-                if args.mix_up:
-                    feats = mixup(feats, args.alpha)[0]
 
                 if args.train_stage != 2:
                     outputs, states = model(feats)
-                    outputs_dsn = dsn_fc(outputs)
                     outputs = fc(outputs, restart=False)
                 else:
                     with torch.no_grad():
                         outputs, states = model(feats)
-                        outputs_dsn = dsn_fc(outputs)
                         outputs = fc(outputs, restart=False)
                 loss = criterion(outputs, labels)
-                loss_cla.append(loss)
+                loss_list.append(loss)
                 losses[patch_step].update(loss.data.item(), len(feat_list))
-
-                loss_dsn = criterion(outputs_dsn, labels)
-                loss_list_dsn.append(loss_dsn)
 
                 acc = accuracy(outputs, labels, topk=(1,))[0]
                 top1[patch_step].update(acc.item())
 
-                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
-                                                                                                                -1)
+                confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
                 reward = confidence - confidence_last
                 confidence_last = confidence
 
                 reward_list[patch_step - 1].update(reward.data.mean(), len(feat_list))
                 memory.rewards.append(reward)
 
-            # print(f"loss_cla:\n{loss_cla}")
-            # print(f"loss_list_dsn:\n{loss_list_dsn}")
-            loss = (sum(loss_cla) + args.dsn_ratio * sum(loss_list_dsn)) / args.T
+            loss = sum(loss_list) / args.T
             if args.train_stage != 2:
                 optimizer.zero_grad()
                 loss.backward()
@@ -1080,14 +785,6 @@ def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
             )
             progress_bar.update()
 
-            # _acc = [acc.avg for acc in top1]
-            # print('accuracy of each step:')
-            # print(_acc)
-
-            # _reward = [reward.avg for reward in reward_list]
-            # print('reward of each step:')
-            # print(_reward)
-
     progress_bar.close()
     if args.train_stage != 2 and scheduler is not None and epoch >= args.warmup:
         scheduler.step()
@@ -1095,32 +792,18 @@ def train_ABMIL(args, epoch, train_set, model, model_prime, fc, ppo, memory, cri
     labels = torch.cat(labels_list)
     outputs = torch.cat(outputs_list)
     acc, auc, precision, recall, f1_score = get_metrics(outputs, labels)
-    # predict = torch.softmax(outputs, dim=1)
-    # auc = roc_auc_score(labels.cpu().numpy(), predict[:, 1].cpu().numpy())
 
     return losses[-1].avg, acc, auc, precision, recall, f1_score
 
 
-def test_ABMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, mode):
+def test_ABMIL(args, test_set, model, fc, ppo, memory, criterion):
     losses = [AverageMeter() for _ in range(args.T)]
-    # top1 = [AverageMeter() for _ in range(args.T)]
     reward_list = [AverageMeter() for _ in range(args.T - 1)]
-    model_prime.eval()
     model.eval()
     fc.eval()
-    dsn_fc_prime = model_prime.module.fc
-    dsn_fc = model.module.fc
-    acc_list, auc_list = [], []
     with torch.no_grad():
-
-        # progress_bar = tqdm(test_set)
         feat_list, cluster_list, label_list, case_id_list, step = [], [], [], [], 0
-        # batch_idx = 0
-        # labels_list, outputs_list = [], []
         for data_idx, (feat, cluster, label, case_id) in enumerate(test_set):
-            loss_cla = []
-            loss_list_dsn = []
-
             feat = feat.unsqueeze(0).to(args.device)
             label = label.unsqueeze(0).to(args.device)
             feat_list.append(feat)
@@ -1128,31 +811,18 @@ def test_ABMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
             label_list.append(label)
             case_id_list.append(case_id)
 
+        loss_list = []
         labels = torch.cat(label_list)
         action_sequence = torch.rand((len(feat_list), args.num_clusters), device=feat_list[0].device)
         feats = get_feats(feat_list, cluster_list, action_sequence=action_sequence, feat_size=args.feat_size)
-        # if args.mix_up:
-        #     feats = mixup(feats, args.alpha)[0]
 
-        outputs, states = model_prime(feats)
-        outputs_dsn = dsn_fc_prime(outputs)
+        outputs, states = model(feats)
         outputs = fc(outputs, restart=True)
 
-        loss_prime = criterion(outputs, labels)
-        loss_cla.append(loss_prime)
+        loss = criterion(outputs, labels)
+        loss_list.append(loss)
 
-        loss_dsn = criterion(outputs_dsn, labels)
-        loss_list_dsn.append(loss_dsn)
-
-        losses[0].update(loss_prime.data.item(), outputs.shape[0])
-        # acc, auc = acc_auc(outputs, labels)
-        # acc_list.append(acc)
-        # auc_list.append(auc)
-        # losses[0].update(loss_dsn.data.item(), outputs.shape[0])
-        # acc = accuracy(outputs, labels, topk=(1,))[0]
-        # acc = accuracy(outputs_dsn, labels, topk=(1,))[0]
-        # top1[0].update(acc.item())
-        # print_outputs(outputs, labels, case_id_list)
+        losses[0].update(loss.data.item(), outputs.shape[0])
 
         confidence_last = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1, -1)
         for patch_step in range(1, args.T):
@@ -1163,26 +833,13 @@ def test_ABMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
                     action = ppo.select_action(states.to(0), memory, restart_batch=True)
                 else:
                     action = ppo.select_action(states.to(0), memory)
-
             feats = get_feats(feat_list, cluster_list, action_sequence=action, feat_size=args.feat_size)
-            # if args.mix_up:
-            #     feats = mixup(feats, args.alpha)[0]
             outputs, states = model(feats)
-            outputs_dsn = dsn_fc(outputs)
             outputs = fc(outputs, restart=False)
 
             loss = criterion(outputs, labels)
-            loss_cla.append(loss)
+            loss_list.append(loss)
             losses[patch_step].update(loss.data.item(), len(feat_list))
-
-            loss_dsn = criterion(outputs_dsn, labels)
-            loss_list_dsn.append(loss_dsn)
-
-            # acc, auc = acc_auc(outputs, labels)
-            # acc_list.append(acc)
-            # auc_list.append(auc)
-            # acc = accuracy(outputs, labels, topk=(1,))[0]
-            # top1[patch_step].update(acc.item())
 
             confidence = torch.gather(F.softmax(outputs.detach(), 1), dim=1, index=labels.view(-1, 1)).view(1,
                                                                                                             -1)
@@ -1198,9 +855,9 @@ def test_ABMIL(args, test_set, model, model_prime, fc, ppo, memory, criterion, m
 
 
 # Basic Functions ------------------------------------------------------------------------------------------------------
-def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, memory, criterion, optimizer, scheduler,
-          tb_writer, save_dir):
+def train(args, train_set, valid_set, test_set, model, fc, ppo, memory, criterion, optimizer, scheduler, tb_writer):
     # Init variables
+    save_dir = args.save_dir
     best_train_acc = BestVariable(order='max')
     best_valid_acc = BestVariable(order='max')
     best_test_acc = BestVariable(order='max')
@@ -1228,16 +885,13 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
         if optimizer is not None:
             for k, group in enumerate(optimizer.param_groups):
                 print(f"group[{k}]: {group['lr']}")
+
         train_loss, train_acc, train_auc, train_precision, train_recall, train_f1_score = \
-            TRAIN[args.arch](args, epoch, train_set, model, model_prime, fc, ppo, memory, criterion, optimizer,
-                             scheduler)
+            TRAIN[args.arch](args, epoch, train_set, model, fc, ppo, memory, criterion, optimizer, scheduler)
         valid_loss, valid_acc, valid_auc, valid_precision, valid_recall, valid_f1_score, *_ = \
-            TEST[args.arch](args, valid_set, model, model_prime, fc, ppo, memory, criterion, mode='Valid')
+            TEST[args.arch](args, valid_set, model, fc, ppo, memory, criterion, mode='Valid')
         test_loss, test_acc, test_auc, test_precision, test_recall, test_f1_score, *_ = \
-            TEST[args.arch](args, test_set, model, model_prime, fc, ppo, memory, criterion, mode='Test ')
-        if args.nni:
-            score = (test_acc + test_auc) / 2
-            nni.report_intermediate_result(score)
+            TEST[args.arch](args, test_set, model, fc, ppo, memory, criterion, mode='Test ')
 
         # Write to tensorboard
         if tb_writer is not None:
@@ -1261,9 +915,7 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
             final_loss = test_loss
             final_acc = test_acc
             final_auc = test_auc
-            final_precision = test_precision
-            final_recall = test_recall
-            final_f1_score = test_f1_score
+
         # Compute best result
         best_train_acc.compare(train_acc, epoch + 1, inplace=True)
         best_valid_acc.compare(valid_acc, epoch + 1, inplace=True)
@@ -1278,10 +930,7 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
         state = {
             'epoch': epoch + 1,
             'model_state_dict': model.module.state_dict(),
-            'model_prime_state_dict': model_prime.module.state_dict(),
             'fc': fc.state_dict(),
-            'acc': valid_acc,
-            'best_acc': best_valid_acc.best,
             'optimizer': optimizer.state_dict() if optimizer else None,
             'ppo_optimizer': ppo.optimizer.state_dict() if ppo else None,
             'policy': ppo.policy.state_dict() if ppo else None,
@@ -1321,24 +970,23 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
         )
 
         # Early Stop
-        if early_stop is not None and (train_acc > args.wait_thresh or epoch > args.wait_epoch):
-            early_stop.update((best_valid_acc.best, best_valid_loss.best))
+        if early_stop is not None:
+            early_stop.update((best_valid_loss.best, best_valid_acc.best, best_valid_auc.best))
             if early_stop.is_stop():
                 break
 
     if tb_writer is not None:
         tb_writer.close()
-    # if args.nni:
-    #     score = ((1 - test_loss) + test_acc + test_auc) / 3
-    #     nni.report_final_result(score)
+
     return best_model
 
 
-def test(args, test_set, model, model_prime, fc, ppo, memory, criterion, mode='Test '):
+def test(args, test_set, model, fc, ppo, memory, criterion):
     model.eval()
+    fc.eval()
     with torch.no_grad():
         loss, acc, auc, precision, recall, f1_score, outputs_tensor, labels_tensor, case_id_list = \
-            TEST[args.arch](args, test_set, model, model_prime, fc, ppo, memory, criterion, mode)
+            TEST[args.arch](args, test_set, model, fc, ppo, memory, criterion)
         prob = torch.softmax(outputs_tensor, dim=1)
         _, pred = torch.max(prob, dim=1)
         preds = pd.DataFrame(columns=['label', 'pred', 'correct', *[f'prob{i}' for i in range(prob.shape[1])]])
@@ -1363,12 +1011,6 @@ def run(args):
         args.save_dir = str(Path(args.base_save_dir) / args.save_dir)
     args.save_dir = increment_path(Path(args.save_dir), exist_ok=args.exist_ok, sep='_')  # increment run
     Path(args.save_dir).mkdir(parents=True, exist_ok=True)
-    # print(args.save_dir)
-
-    # Save arguments
-    with open(Path(args.save_dir) / 'args.yaml', 'w') as fp:
-        yaml.dump(vars(args), fp, sort_keys=False)
-    print(args, '\n')
 
     if not args.device == 'cpu':
         os.environ['CUDA_VISIBLE_DEVICES'] = str(args.device)
@@ -1376,38 +1018,38 @@ def run(args):
     else:
         args.device = torch.device('cpu')
 
-    # Dataset, Model, Criterion, Optimizer and Scheduler
+    # Dataset
     datasets, dim_patch, train_length = get_datasets(args)
-    args.num_data = train_length * args.data_repeat
+    args.num_data = train_length
     args.eval_step = int(args.num_data / args.batch_size)
     print(f"train_length: {train_length}, epoch_step: {args.num_data}, eval_step: {args.eval_step}")
-    model, model_prime, fc, ppo = create_model(args, dim_patch)
+
+    # Model, Criterion, Optimizer and Scheduler
+    model, fc, ppo = create_model(args, dim_patch)
     criterion = get_criterion(args)
-    optimizer = get_optimizer(args, model, model_prime, fc)
+    optimizer = get_optimizer(args, model, fc)
     scheduler = get_scheduler(args, optimizer)
+
+    # Save arguments
+    with open(Path(args.save_dir) / 'args.yaml', 'w') as fp:
+        yaml.dump(vars(args), fp, sort_keys=False)
+    print(args, '\n')
 
     # TensorBoard
     tb_writer = SummaryWriter(args.save_dir) if args.use_tensorboard else None
 
     # Start training
     memory = rlmil.Memory()
-    best_model = train(args, datasets['train'], datasets['valid'], datasets['test'], model, model_prime, fc, ppo,
-                       memory, criterion, optimizer, scheduler, tb_writer, args.save_dir)
+    best_model = train(args, datasets['train'], datasets['valid'], datasets['test'], model, fc, ppo, memory, criterion,
+                       optimizer, scheduler, tb_writer)
     model.module.load_state_dict(best_model['model_state_dict'])
-    model_prime.module.load_state_dict(best_model['model_prime_state_dict'])
     fc.load_state_dict(best_model['fc'])
     if ppo is not None:
         ppo.policy.load_state_dict(best_model['policy'])
     loss, acc, auc, precision, recall, f1_score, preds = \
-        test(args, datasets['test'], model, model_prime, fc, ppo, memory, criterion, mode='Pred')
-
-    if args.nni:
-        score = (acc + auc) / 2
-        nni.report_final_result(score)
+        test(args, datasets['test'], model, fc, ppo, memory, criterion)
 
     # Save results
-    # pred.to_csv(str(Path(args.save_dir) / 'pred.csv'))
-    # print(f'Pred | Loss: {loss:.4f}, Acc: {acc:.4f}, AUC: {auc}\nPredicted Ending.\n')
     preds.to_csv(str(Path(args.save_dir) / 'pred.csv'))
     final_res = pd.DataFrame(columns=['loss', 'acc', 'auc', 'precision', 'recall', 'f1_score'])
     final_res.loc[f'seed{args.seed}'] = [loss, acc, auc, precision, recall, f1_score]
@@ -1448,23 +1090,19 @@ def main():
                         help="specify the lr scheduler used, default None")
     parser.add_argument('--batch_size', type=int, default=1,
                         help="the batch size for training")
-    parser.add_argument('--epochs', type=int, default=40,
-                        help="指定最多训练多少个epochs")
+    parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--ppo_epochs', type=int, default=10,
                         help="the training epochs for R")
     parser.add_argument('--backbone_lr', default=1e-4, type=float)
     parser.add_argument('--fc_lr', default=1e-4, type=float)
-    parser.add_argument('--momentum', type=float, default=0.9,
-                        help="SGD优化器中的参数momentum, 默认0.5")
+    parser.add_argument('--momentum', type=float, default=0.9)
     parser.add_argument('--nesterov', action='store_true', default=True)
-    parser.add_argument('--beta1', type=float, default=0.9,
-                        help="Adam优化器中的参数momentum")
-    parser.add_argument('--beta2', type=float, default=0.999,
-                        help="Adam优化器中的参数momentum")
+    parser.add_argument('--beta1', type=float, default=0.9)
+    parser.add_argument('--beta2', type=float, default=0.999)
     parser.add_argument('--warmup', default=0, type=float,
-                        help='当使用lr_scheduler时, 预热warmup个epochs后才更新lr')
+                        help="the number of epoch for training without lr scheduler, if scheduler is not None")
     parser.add_argument('--wdecay', default=1e-5, type=float,
-                        help='所有优化器的weight decay')
+                        help="the weight decay of optimizer")
     parser.add_argument('--picked_method', type=str, default='score',
                         help="the metric of pick best model from validation dataset")
     parser.add_argument('--patience', type=int, default=None,
