@@ -33,10 +33,11 @@ def create_save_dir(args):
     dir2 = f'MuRCL'
     murcl_setting = [
         f'T{args.T}',
-        f'phd{args.policy_hidden_dim}',
+        f'pd{args.projection_dim}',
         f'as{args.action_std}',
         f'pg{args.ppo_gamma}',
-        f'fhd{args.fc_hidden_dim}',
+        f'tau{args.temperature}',
+        f'alpha{args.temperature}',
     ]
     dir3 = '_'.join(murcl_setting)
     dir4 = args.arch
@@ -54,17 +55,12 @@ def create_save_dir(args):
     else:
         raise ValueError()
     dir5 = '_'.join(arch_setting)
-    dir6 = 'pretrain'
-    dir7 = f'exp'
+    dir6 = f'exp'
     if args.save_dir_flag is not None:
-        dir7 = f'{dir7}_{args.save_dir_flag}'
-    dir8 = f'seed{args.seed}'
-    dir9 = f'stage_{args.train_stage}'
-    if args.nni:
-        args.save_dir = str(
-            Path(args.base_save_dir) / 'nni_search' / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8 / dir9)
-    else:
-        args.save_dir = str(Path(args.base_save_dir) / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8 / dir9)
+        dir6 = f'{dir6}_{args.save_dir_flag}'
+    dir7 = f'seed{args.seed}'
+    dir8 = f'stage_{args.train_stage}'
+    args.save_dir = str(Path(args.base_save_dir) / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8)
     print(f"save_dir: {args.save_dir}")
 
 
