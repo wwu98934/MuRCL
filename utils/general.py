@@ -1,17 +1,17 @@
-# General utils
-import glob
 import os
-import random
 import re
+import csv
 import yaml
 import json
-import csv
+import glob
+import shutil
+import random
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
-from sklearn.metrics import roc_auc_score, roc_curve, precision_recall_fscore_support
+from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
 
 
 def init_seeds(seed=0):
@@ -75,7 +75,7 @@ def dump_json(data_dict, filename):
 
 
 def load_json(filename):
-    with open(filename) as fp:
+    with open(filename, 'r', encoding='utf-8') as fp:
         data_dict = json.load(fp)
     return data_dict
 
@@ -187,83 +187,6 @@ class BestVariable:
         return flag
 
 
-def bootstrap_auc(y_true, y_pred, n_bootstraps=2000, rng_seed=42):
-    n_bootstraps = n_bootstraps
-    rng_seed = rng_seed
-    bootstrapped_scores = []
-
-    rng = np.random.RandomState(rng_seed)
-    for i in range(n_bootstraps):
-        indices = rng.randint(len(y_pred), size=len(y_pred))
-        score = roc_auc_score(y_true[indices], y_pred[indices])
-        bootstrapped_scores.append(score)
-        # print("Bootstrap #{} ROC area: {:0.3f}".format(i + 1, score))
-    bootstrapped_scores = np.array(bootstrapped_scores)
-
-    print("AUROC: {:0.3f}".format(roc_auc_score(y_true, y_pred)))
-    print("Confidence interval for the AUROC score: [{:0.3f} - {:0.3}]".format(
-        np.percentile(bootstrapped_scores, (2.5, 97.5))[0], np.percentile(bootstrapped_scores, (2.5, 97.5))[1]))
-
-    return roc_auc_score(y_true, y_pred), np.percentile(bootstrapped_scores, (2.5, 97.5))
-
-
-def optimal_thresh(fpr, tpr, thresholds, p=0):
-    loss = (fpr - tpr) - p * tpr / (fpr + tpr + 1)
-    idx = np.argmin(loss, axis=0)
-    return fpr[idx], tpr[idx], thresholds[idx]
-
-
-def five_scores(bag_labels, bag_predictions):
-    fpr, tpr, threshold = roc_curve(bag_labels, bag_predictions, pos_label=1)
-    fpr_optimal, tpr_optimal, threshold_optimal = optimal_thresh(fpr, tpr, threshold)
-    auc_value = roc_auc_score(bag_labels, bag_predictions)
-    this_class_label = np.array(bag_predictions)
-    this_class_label[this_class_label >= threshold_optimal] = 1
-    this_class_label[this_class_label < threshold_optimal] = 0
-    bag_predictions = this_class_label
-    precision, recall, fscore, _ = precision_recall_fscore_support(bag_labels, bag_predictions, average='binary')
-    accuracy = 1 - np.count_nonzero(np.array(bag_labels).astype(int) - bag_predictions.astype(int)) / len(bag_labels)
-    return accuracy, auc_value, precision, recall, fscore
-
-
-def acc_auc(outputs, targets):
-    with torch.no_grad():
-        assert outputs.shape[0] == targets.shape[0]
-        bs = targets.shape[0]
-
-        if outputs.shape[1] > 2:
-            return multi_class_acc_auc(outputs, targets)
-
-        targets = np.asarray(targets.cpu().numpy(), dtype=int).reshape(-1)
-        probs = np.asarray(torch.softmax(outputs, dim=1).cpu().numpy())
-        auc = roc_auc_score(targets, probs[:, 1])
-
-        fpr, tpr, threshold = roc_curve(targets, probs[:, 1], pos_label=1)
-        fpr_optimal, tpr_optimal, threshold_optimal = optimal_thresh(fpr, tpr, threshold)
-        preds = np.array(probs[:, 1])
-        preds[preds >= threshold_optimal] = 1
-        preds[preds < threshold_optimal] = 0
-        correct = np.equal(preds, targets)
-        acc = sum(correct) / bs
-
-    return acc, auc
-
-
-def multi_class_acc_auc(outputs, targets):
-    with torch.no_grad():
-        assert outputs.shape[0] == targets.shape[0]
-        bs = targets.shape[0]
-        _, preds = torch.max(outputs, dim=1)
-        correct = preds.eq(targets)
-        acc = sum(correct) / bs
-
-        targets = np.asarray(targets.cpu().numpy(), dtype=int).reshape(-1)
-        probs = np.asarray(torch.softmax(outputs, dim=1).cpu().numpy())
-        auc = roc_auc_score(targets, probs, multi_class='ovr')
-
-    return acc.item(), auc
-
-
 def get_metrics(outputs, targets):
     with torch.no_grad():
         assert outputs.shape[0] == targets.shape[0]
@@ -297,6 +220,13 @@ def get_metrics(outputs, targets):
 
 def get_score(acc, auc, precision, recall, f1_score):
     return 0.3 * acc + 0.3 * auc + 0.1 * precision + 0.1 * recall + 0.2 * f1_score
+
+
+def save_checkpoint(state, is_best, checkpoint, filename='checkpoint.pth.tar'):
+    filepath = os.path.join(checkpoint, filename)
+    torch.save(state, filepath)
+    if is_best:
+        shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
 
 
 # Test -----------------------------------------------------------------------------------------------------------------

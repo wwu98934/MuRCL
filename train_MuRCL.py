@@ -1,6 +1,5 @@
 import os
 import yaml
-import shutil
 import argparse
 import pandas as pd
 from tqdm import tqdm
@@ -11,16 +10,9 @@ from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.datasets import WSIWithCluster, mixup, get_feats
-from utils.general import AverageMeter, CSVWriter, EarlyStop, increment_path, BestVariable, init_seeds
-from models import rlmil
+from utils.general import AverageMeter, CSVWriter, EarlyStop, increment_path, BestVariable, init_seeds, save_checkpoint
+from models import rlmil, abmil, clam, cl
 from utils.losses import NT_Xent
-
-
-def save_checkpoint(state, is_best, checkpoint, filename='checkpoint.pth.tar'):
-    filepath = os.path.join(checkpoint, filename)
-    torch.save(state, filepath)
-    if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
 
 
 def create_save_dir(args):
@@ -77,7 +69,7 @@ def create_model(args, dim_patch):
     print(f"Creating model {args.arch}...")
     # Create raw model
     if args.arch == 'ABMIL':
-        model = rlmil.ABMIL(
+        model = abmil.ABMIL(
             dim_in=dim_patch,
             L=args.model_dim,
             D=args.D,
@@ -85,7 +77,7 @@ def create_model(args, dim_patch):
             dropout=args.dropout,
         )
     elif args.arch == 'CLAM_SB':
-        model = rlmil.CLAM_SB(
+        model = clam.CLAM_SB(
             gate=True,
             size_arg=args.size_arg,
             dropout=True,
@@ -98,9 +90,9 @@ def create_model(args, dim_patch):
         raise NotImplementedError(f'args.arch error, {args.arch}. ')
     # Wrapping with CL structure
     if args.arch == 'ABMIL':
-        model = rlmil.CL(model, projection_dim=args.projection_dim, n_features=model.fc.in_features)
+        model = cl.CL(model, projection_dim=args.projection_dim, n_features=model.fc.in_features)
     elif args.arch == 'CLAM_SB':
-        model = rlmil.CL(model, projection_dim=args.projection_dim, n_features=model.classifiers.in_features)
+        model = cl.CL(model, projection_dim=args.projection_dim, n_features=model.classifiers.in_features)
     else:
         raise NotImplementedError
     fc = rlmil.Full_layer(args.feature_num, args.fc_hidden_dim, args.fc_rnn, args.projection_dim)
@@ -395,8 +387,7 @@ def main():
     # Data
     parser.add_argument('--dataset', type=str, default='Camelyon16',
                         help="dataset name")
-    parser.add_argument('--data_csv', type=str,
-                        default='/data2/wwu/CAMELYON16/patch/patch_20x_s256_rgb/features_wo_norm/simclr_resnet18_v0_cluster_10.csv',
+    parser.add_argument('--data_csv', type=str, default='',
                         help="the .csv filepath used")
     parser.add_argument('--preload', action='store_true', default=False,
                         help="preload the patch features, default False")
@@ -406,7 +397,7 @@ def main():
                         help="the size of selected WSI set. (we recommend 1024 at 20x magnification")
     # Train
     parser.add_argument('--train_stage', default=1, type=int,
-                        help="select training stage, see our paper for details \
+                        help="select training stage \
                               stage-1 : warm-up \
                               stage-2 : learn to select patches with RL \
                               stage-3 : finetune")
@@ -467,7 +458,7 @@ def main():
     # Loss
     parser.add_argument('--use_tensorboard', action='store_true', default=False)
     # Save
-    parser.add_argument('--base_save_dir', type=str, default='/data11/wwu/RLMIL/results')
+    parser.add_argument('--base_save_dir', type=str, default='./results')
     parser.add_argument('--save_dir', type=str, default=None,
                         help="specify the save directory to save experiment results, default None."
                              "If not specify, the directory will be create by function create_save_dir(args)")

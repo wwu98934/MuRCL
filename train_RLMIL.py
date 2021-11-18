@@ -1,6 +1,5 @@
 import os
 import copy
-import shutil
 import yaml
 import argparse
 import pandas as pd
@@ -15,57 +14,10 @@ import torch.nn.functional as F
 from torch import nn, optim
 from torch.utils.tensorboard import SummaryWriter
 
-from utils.datasets import WSIWithCluster
+from utils.datasets import WSIWithCluster, get_feats
 from utils.general import AverageMeter, CSVWriter, EarlyStop, increment_path, BestVariable, accuracy, init_seeds, \
-    load_json, get_metrics, get_score
-from models import rlmil
-
-
-def get_feats(feat_list, clusters_list, action_sequence, feat_size=256):
-    """Get small patch of the original image"""
-    batch_size = len(feat_list)
-    device = action_sequence.device
-
-    feats = []
-    for i in range(batch_size):
-        num_patch = feat_list[i].shape[-2]
-        sample_ratio = feat_size / num_patch
-        num_feats_cluster = torch.tensor([len(c) for c in clusters_list[i]], device=device)
-        num_feats_cluster_size = torch.round(num_feats_cluster * sample_ratio).int()
-        feat_coordinate_l = torch.floor(action_sequence[i] * (num_feats_cluster - num_feats_cluster_size)).int()
-        feat_coordinate_r = feat_coordinate_l + num_feats_cluster_size
-        indices = []
-        for j, c in enumerate(clusters_list[i]):
-            index = c[feat_coordinate_l[j].item():feat_coordinate_r[j].item()]
-            indices.extend(index)
-        indices = sorted(indices)
-        per_feat = feat_list[i][:, indices, :]
-        if per_feat.shape[-2] < feat_size:
-            margin = feat_size - per_feat.shape[-2]
-            feat_pad = torch.zeros(size=(1, margin, per_feat.shape[-1]), device=device)
-            per_feat = torch.cat((per_feat, feat_pad), dim=1)
-        else:
-            per_feat = per_feat[:, :feat_size, :]
-        feats.append(per_feat)
-    feats = torch.cat(feats, 0)
-    return feats
-
-
-def mixup(inputs, alpha):
-    batch_size = inputs.shape[0]
-    lambda_ = alpha + torch.rand(size=(batch_size, 1), device=inputs.device) * (1 - alpha)
-    rand_idx = torch.randperm(batch_size, device=inputs.device)
-    a = torch.stack([lambda_[i] * inputs[i] for i in range(batch_size)])
-    b = torch.stack([(1 - lambda_[i]) * inputs[rand_idx[i]] for i in range(batch_size)])
-    outputs = a + b
-    return outputs, lambda_, rand_idx
-
-
-def save_checkpoint(state, is_best, checkpoint, filename='checkpoint.pth.tar'):
-    filepath = os.path.join(checkpoint, filename)
-    torch.save(state, filepath)
-    if is_best:
-        shutil.copyfile(filepath, os.path.join(checkpoint, 'model_best.pth.tar'))
+    load_json, get_metrics, get_score, save_checkpoint
+from models import rlmil, abmil, clam, dsmil
 
 
 def create_save_dir(args):
@@ -73,11 +25,9 @@ def create_save_dir(args):
     dir2 = f'RLMIL'
     rlmil_setting = [
         f'T{args.T}',
-        f'dr{args.dsn_ratio}',
         f'phd{args.policy_hidden_dim}',
         f'as{args.action_std}',
         f'pg{args.ppo_gamma}',
-        f'ke{args.K_epochs}',
         f'fhd{args.fc_hidden_dim}',
     ]
     dir3 = '_'.join(rlmil_setting)
@@ -91,7 +41,7 @@ def create_save_dir(args):
         ]
     elif args.arch in ['DSMIL']:
         arch_setting = ['default']
-    elif args.arch in ['CLAM_SB', 'CLAM_MB']:
+    elif args.arch in ['CLAM_SB']:
         arch_setting = [
             f"size_{args.size_arg}",
             f"ks_{args.k_sample}",
@@ -106,11 +56,7 @@ def create_save_dir(args):
         dir7 = f'{dir7}_{args.save_dir_flag}'
     dir8 = f'seed{args.seed}'
     dir9 = f'stage_{args.train_stage}'
-    if args.nni:
-        args.save_dir = str(
-            Path(args.base_save_dir) / 'nni_search' / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8 / dir9)
-    else:
-        args.save_dir = str(Path(args.base_save_dir) / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8 / dir9)
+    args.save_dir = str(Path(args.base_save_dir) / dir1 / dir2 / dir3 / dir4 / dir5 / dir6 / dir7 / dir8 / dir9)
     print(f"save_dir: {args.save_dir}")
 
 
@@ -1271,7 +1217,8 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
     accs_csv = CSVWriter(filename=Path(save_dir) / 'accs.csv', header=header)
     aucs_csv = CSVWriter(filename=Path(save_dir) / 'aucs.csv', header=header)
     results_csv = CSVWriter(filename=Path(save_dir) / 'results.csv',
-                            header=['epoch', 'final_epoch', 'final_loss', 'final_acc', 'final_auc', 'final_precision', 'final_recall', 'final_f1_score'])
+                            header=['epoch', 'final_epoch', 'final_loss', 'final_acc', 'final_auc', 'final_precision',
+                                    'final_recall', 'final_f1_score'])
 
     best_model = copy.deepcopy({'state_dict': model.state_dict()})
     early_stop = EarlyStop(max_num_accordance=args.patience) if args.patience is not None else None
@@ -1357,7 +1304,8 @@ def train(args, train_set, valid_set, test_set, model, model_prime, fc, ppo, mem
                             (best_train_auc.best, best_train_auc.epoch),
                             (best_valid_auc.best, best_valid_auc.epoch),
                             (best_test_auc.best, best_test_auc.epoch)])
-        results_csv.write_row([epoch + 1, final_epoch, test_loss, test_acc, test_auc, test_precision, test_recall, test_f1_score])
+        results_csv.write_row(
+            [epoch + 1, final_epoch, test_loss, test_acc, test_auc, test_precision, test_recall, test_f1_score])
 
         print(
             f"Train acc: {train_acc:.4f}, Best: {best_train_acc.best:.4f}, Epoch: {best_train_acc.epoch:2}, "
@@ -1472,43 +1420,40 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser()
     # Data
-    parser.add_argument('--dataset', type=str, default='CAMELYON16_20x_s256_rgb_simclr_resnet18_v0_cluster10',
-                        help='Specify the dataset used')
-    parser.add_argument('--data_csv', type=str,
-                        default='/data4/wwu/CAMELYON16/patch/patch_20x_s256_rgb/features_wo_norm/simclr_resnet18_v0_cluster_10.csv',
-                        help='')
-    parser.add_argument('--data_split_json', type=str, default='/data4/wwu/CAMELYON16/data_split_985.json',
-                        help="当数据划分方式(--data_split)为fixed时，由该变量传递json格式的文件路径")
-    parser.add_argument('--train_data', type=str, default='train')
+    parser.add_argument('--dataset', type=str, default='Camelyon16',
+                        help="dataset name")
+    parser.add_argument('--data_csv', type=str, default='',
+                        help="the .csv filepath used")
+    parser.add_argument('--data_split_json', type=str, default='/path/to/data_split.json')
+    parser.add_argument('--train_data', type=str, default='train', choices=['train', 'train_sub_per10'],
+                        help="specify how much data used")
     parser.add_argument('--preload', action='store_true', default=False,
-                        help="决定是否预加载数据")
-    parser.add_argument('--data_repeat', type=int, default=1)
+                        help="preload the patch features, default False")
     parser.add_argument('--feat_size', default=1024, type=int,
-                        help='size of local map (we recommend 96 / 128 / 144)')
-    parser.add_argument('--mix_up', action='store_true', default=False)
-    parser.add_argument('--alpha', type=float, default=0.8)
+                        help="the size of selected WSI set. (we recommend 1024 at 20x magnification")
     # Train
     parser.add_argument('--train_method', type=str, default='scratch', choices=['scratch', 'finetune', 'linear'])
     parser.add_argument('--train_stage', default=1, type=int,
-                        help="select training stage, see our paper for details \
-                              stage-1 : warm-up \
-                              stage-2 : learn to select patches with RL \
-                              stage-3 : finetune CNNs")
+                        help="select training stage \
+                                  stage-1 : warm-up \
+                                  stage-2 : learn to select patches with RL \
+                                  stage-3 : finetune")
     parser.add_argument('--T', default=6, type=int,
-                        help='maximum length of the sequence of Glance + Focus')
-    parser.add_argument('--checkpoint_path', default=None, type=str,
-                        help='path to the stage-2/3 checkpoint (for training stage-2/3)')
-    parser.add_argument('--checkpoint', type=str, default=None,
-                        help='path to the stage-1 checkpoint (for finetune stage-1)')
-    parser.add_argument('--train_model_prime', action='store_true', default=True)
-    parser.add_argument('--optimizer', type=str, default='Adam', choices=['AdamW', 'Adam', 'SGD', 'RMSprop'],
-                        help="指定训练时使用的optimizer")
+                        help="maximum length of the sequence of RNNs")
+    parser.add_argument('--checkpoint_stage', default=None, type=str,
+                        help="path to the stage-1/2 checkpoint (for training stage-2/3)")
+    parser.add_argument('--checkpoint_pretrained', type=str, default=None,
+                        help='path to the pretrained checkpoint (for finetune and linear)')
+    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD'],
+                        help="specify the optimizer used, default Adam")
     parser.add_argument('--scheduler', type=str, default=None, choices=[None, 'StepLR', 'CosineAnnealingLR'],
-                        help="指定训练时使用的scheduler, 默认为None不使用")
+                        help="specify the lr scheduler used, default None")
     parser.add_argument('--batch_size', type=int, default=1,
-                        help='指定训练batch_size个数据时进行一次参数更新')
+                        help="the batch size for training")
     parser.add_argument('--epochs', type=int, default=40,
                         help="指定最多训练多少个epochs")
+    parser.add_argument('--ppo_epochs', type=int, default=10,
+                        help="the training epochs for R")
     parser.add_argument('--backbone_lr', default=1e-4, type=float)
     parser.add_argument('--fc_lr', default=1e-4, type=float)
     parser.add_argument('--momentum', type=float, default=0.9,
@@ -1520,24 +1465,23 @@ def main():
                         help="Adam优化器中的参数momentum")
     parser.add_argument('--warmup', default=0, type=float,
                         help='当使用lr_scheduler时, 预热warmup个epochs后才更新lr')
-    parser.add_argument('--wdecay', default=5e-4, type=float,
+    parser.add_argument('--wdecay', default=1e-5, type=float,
                         help='所有优化器的weight decay')
     parser.add_argument('--picked_method', type=str, default='score',
-                        help="指定挑选最优模型的方式, 默认为acc, 也可以是loss")
+                        help="the metric of pick best model from validation dataset")
     parser.add_argument('--patience', type=int, default=None,
-                        help="停止训练的容忍度, 默认为10, 即验证集的best result在10个epochs内都没有变化则停止训练")
+                        help="if the loss not change during `patience` epochs, the training will early stop")
 
     # Architecture
-    parser.add_argument('--arch', default='ABMIL', type=str, choices=MODELS, help='model name')
+    parser.add_argument('--arch', default='CLAM_SB', type=str, choices=MODELS, help='model name')
     parser.add_argument('--num_classes', type=int, default=2)
-    parser.add_argument('--dsn_ratio', type=float, default=1.)
     # Architecture - PPO
-    parser.add_argument('--policy_hidden_dim', type=int, default=256)
+    parser.add_argument('--policy_hidden_dim', type=int, default=512)
     parser.add_argument('--policy_conv', action='store_true', default=False)
     parser.add_argument('--action_std', type=float, default=0.5)
     parser.add_argument('--ppo_lr', type=float, default=0.00001)
-    parser.add_argument('--ppo_gamma', type=float, default=0.3)
-    parser.add_argument('--K_epochs', type=int, default=2)
+    parser.add_argument('--ppo_gamma', type=float, default=0.1)
+    parser.add_argument('--K_epochs', type=int, default=3)
     # Architecture - Full_layer
     parser.add_argument('--feature_num', type=int, default=512)
     parser.add_argument('--fc_hidden_dim', type=int, default=512)
@@ -1557,28 +1501,19 @@ def main():
     parser.add_argument('--use_tensorboard', action='store_true', default=False,
                         help="是否使用TensorBoard")
     # Save
-    parser.add_argument('--base_save_dir', type=str, default='/data11/wwu/RLMIL/results')
-    parser.add_argument('--save_dir', type=str, default=None, help="保存实验结果的路径")
-    parser.add_argument('--save_dir_flag', type=str, default=None)
-    parser.add_argument('--exist_ok', action='store_true', default=False,
-                        help="是否覆盖 --save_dir 内的内容")
-    parser.add_argument('--save_model', action='store_true', default=False, help="是否需要保存模型")
+    parser.add_argument('--base_save_dir', type=str, default='./results')
+    parser.add_argument('--save_dir', type=str, default=None,
+                        help="specify the save directory to save experiment results, default None."
+                             "If not specify, the directory will be create by function create_save_dir(args)")
+    parser.add_argument('--save_dir_flag', type=str, default=None,
+                        help="append a `string` to the end of save_dir")
+    parser.add_argument('--exist_ok', action='store_true', default=False)
+    parser.add_argument('--save_model', action='store_true', default=False)
     # Global
     parser.add_argument('--device', default='2',
                         help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
-    parser.add_argument('--seed', type=int, default=985,
-                        help="全局的随机种子")
-    parser.add_argument('--seek', type=str, default=None)
-    parser.add_argument('--seek_thresh', type=float, default=0.55)
-    parser.add_argument('--nni', action='store_true', default=False)
+    parser.add_argument('--seed', type=int, default=985)
     args = parser.parse_args()
-
-    if args.nni:
-        try:
-            tuner_params = nni.get_next_parameter()
-            args = merge_parameter(args, tuner_params)
-        except Exception as exception:
-            raise exception
 
     run(args)
 
@@ -1590,21 +1525,17 @@ if __name__ == '__main__':
     torch.set_num_threads(1)
 
     # Global variables
-    MODELS = ['ABMIL', 'MaxPooling', 'ABMIL_S', 'DSMIL', 'CLAM_SB']
+    MODELS = ['ABMIL', 'CLAM_SB', 'DSMIL']
 
     LOSSES = ['CrossEntropyLoss']
 
     TRAIN = {
         'ABMIL': train_ABMIL,
-        'ABMIL_S': train_ABMIL,
-        'MaxPooling': train_ABMIL,
         'DSMIL': train_DSMIL,
         'CLAM_SB': train_CLAM,
     }
     TEST = {
         'ABMIL': test_ABMIL,
-        'ABMIL_S': test_ABMIL,
-        'MaxPooling': test_ABMIL,
         'DSMIL': test_DSMIL,
         'CLAM_SB': test_CLAM,
     }

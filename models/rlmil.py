@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
-import numpy as np
 
 
 class Memory:
@@ -238,5 +237,3 @@ class Full_layer(torch.nn.Module):
             else:
                 print(self.hidden.size())
                 exit()
-
-
