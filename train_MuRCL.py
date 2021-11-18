@@ -26,7 +26,6 @@ def save_checkpoint(state, is_best, checkpoint, filename='checkpoint.pth.tar'):
 def create_save_dir(args):
     """
     Create directory to save experiment results by global arguments.
-    TODO: need to modify
     :param args: the global arguments
     """
     dir1 = f'{args.dataset}_np_{args.feat_size}'
