@@ -42,7 +42,7 @@ def create_save_dir(args):
     dir4 = args.arch
     if args.arch in ['ABMIL']:
         arch_setting = [
-            f'L{args.L}',
+            f'L{args.model_dim}',
             f'D{args.D}',
             f'dpt{args.dropout}',
         ]
@@ -79,7 +79,7 @@ def create_model(args, dim_patch):
     if args.arch == 'ABMIL':
         model = rlmil.ABMIL(
             dim_in=dim_patch,
-            L=args.L,
+            L=args.model_dim,
             D=args.D,
             dim_out=args.projection_dim,
             dropout=args.dropout,
@@ -119,8 +119,7 @@ def create_model(args, dim_patch):
         model.load_state_dict(checkpoint['model_state_dict'])
         fc.load_state_dict(checkpoint['fc'])
 
-        # TODO: change L to other parameter
-        state_dim = args.L
+        state_dim = args.model_dim
         ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                         action_std=args.action_std,
                         lr=args.ppo_lr,
@@ -137,8 +136,7 @@ def create_model(args, dim_patch):
         model.load_state_dict(checkpoint['model_state_dict'])
         fc.load_state_dict(checkpoint['fc'])
 
-        # TODO: change L to other parameter
-        state_dim = args.L
+        state_dim = args.model_dim
         ppo = rlmil.PPO(dim_patch, state_dim, args.policy_hidden_dim, args.policy_conv,
                         action_std=args.action_std,
                         lr=args.ppo_lr,
@@ -448,6 +446,7 @@ def main():
     parser.add_argument('--arch', default='CLAM_SB', type=str, choices=MODELS, help='model name')
     parser.add_argument('--alpha', type=float, default=0.9)
     parser.add_argument('--projection_dim', type=int, default=128)
+    parser.add_argument('--model_dim', type=int, default=512)
     # Architecture - PPO
     parser.add_argument('--policy_hidden_dim', type=int, default=512)
     parser.add_argument('--policy_conv', action='store_true', default=False)
@@ -460,7 +459,6 @@ def main():
     parser.add_argument('--fc_hidden_dim', type=int, default=512)
     parser.add_argument('--fc_rnn', action='store_true', default=True)
     # Architecture - ABMIL
-    parser.add_argument('--L', type=int, default=512)
     parser.add_argument('--D', type=int, default=128)
     parser.add_argument('--dropout', type=float, default=0.0)
     # CLAM
