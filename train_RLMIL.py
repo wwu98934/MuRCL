@@ -1355,10 +1355,8 @@ def test(args, test_set, model, model_prime, fc, ppo, memory, criterion, mode='T
 
 
 def run(args):
-    # Configures
     init_seeds(args.seed)
 
-    # 如果文件夹存在且不覆盖, 则顺序生成新的文件夹一'_'分隔
     if args.save_dir is None:
         create_save_dir(args)
     else:

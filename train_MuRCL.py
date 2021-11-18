@@ -465,7 +465,6 @@ def main():
     parser.add_argument('--save_dir_flag', type=str, default=None,
                         help="append a `string` to the end of save_dir")
     parser.add_argument('--exist_ok', action='store_true', default=False)
-    parser.add_argument('--save_model', action='store_true', default=False)
     # Global
     parser.add_argument('--device', default='3',
                         help='cuda device, i.e. 0 or 0,1,2,3 or cpu')
