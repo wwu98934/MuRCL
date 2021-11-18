@@ -218,49 +218,36 @@ def mixup(inputs, alpha):
     return outputs, lambda_, rand_idx
 
 
-def get_feats(feat_list, clusters_list, action_sequence, feat_size=256):
-    """Get small patch of the original image"""
-    # print('------------------------------------------')
+def get_feats(feat_list, clusters_list, action_sequence, feat_size=1024):
     batch_size = len(feat_list)
     device = action_sequence.device
-    # print(f"action_sequence: {action_sequence}")
     feats = []
     for i in range(batch_size):
-        # 1 * feature_map * h * w
+        # compute numbers of each cluster
         num_patch = feat_list[i].shape[-2]
-        # print(f"num_patch: {num_patch}")
         sample_ratio = feat_size / num_patch
-        # print(f"sample_ratio: {sample_ratio}")
         num_feats_cluster = torch.tensor([len(c) for c in clusters_list[i]], device=device)
-        # print(f"num_feats_cluster: {num_feats_cluster}")
         num_feats_cluster_size = torch.round(num_feats_cluster * sample_ratio).int()
-        # print(f"num_feats_cluster_size: {num_feats_cluster_size}")
+
+        # compute the indices of selected features by action_sequence
         feat_coordinate_l = torch.floor(action_sequence[i] * (num_feats_cluster - num_feats_cluster_size)).int()
-        # print(f"feat_coordinate_l: {feat_coordinate_l}")
         feat_coordinate_r = feat_coordinate_l + num_feats_cluster_size
-        # print(f"feat_coordinate_r: {feat_coordinate_r}")
         indices = []
         for j, c in enumerate(clusters_list[i]):
             index = c[feat_coordinate_l[j].item():feat_coordinate_r[j].item()]
-            # print(f"index[{j}]: {index}")
             indices.extend(index)
         indices = sorted(indices)
-        # print(f"indices: {len(indices)}")
 
-        # print(f"feat: {feat_list[i].shape}")
+        # construct WSI-Fset
         per_feat = feat_list[i][:, indices, :]
-        # print(f"per_feat: {per_feat.shape}")
         if per_feat.shape[-2] < feat_size:
             margin = feat_size - per_feat.shape[-2]
             feat_pad = torch.zeros(size=(1, margin, per_feat.shape[-1]), device=device)
             per_feat = torch.cat((per_feat, feat_pad), dim=1)
         else:
             per_feat = per_feat[:, :feat_size, :]
-        # print(f"per_feat: {per_feat.shape}")
         feats.append(per_feat)
     feats = torch.cat(feats, 0)
-    # print(f"feats: {feats.shape}")
-    # print('------------------------------------------')
     return feats
 
 

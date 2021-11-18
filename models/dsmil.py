@@ -62,27 +62,22 @@ class BClassifier(nn.Module):
         self.fcc = nn.Conv1d(output_class, output_class, kernel_size=input_size)
 
     def bag_forward(self, feats, c):
-        # assert len(feats.shape) == 3 and feats.shape[0] == 1, f"feats.shape: {feats.shape}"
-        # feats = feats.squeeze(0)
-        # print(f"{feats.shape}")
         device = feats.device
         V = self.v(feats)  # N x V, unsorted
         Q = self.q(feats).view(feats.shape[0], -1)  # N x Q, unsorted
 
         # handle multiple classes without for loop
-        _, m_indices = torch.sort(c, 0,
-                                  descending=True)  # sort class scores along the instance dimension, m_indices in shape N x C
-        m_feats = torch.index_select(feats, dim=0,
-                                     index=m_indices[0, :])  # select critical instances, m_feats in shape C x K
+        # sort class scores along the instance dimension, m_indices in shape N x C
+        _, m_indices = torch.sort(c, 0, descending=True)
+        # select critical instances, m_feats in shape C x K
+        m_feats = torch.index_select(feats, dim=0, index=m_indices[0, :])
         q_max = self.q(m_feats)  # compute queries of critical instances, q_max in shape C x Q
-        A = torch.mm(Q, q_max.transpose(0,
-                                        1))  # compute inner product of Q to each entry of q_max, A in shape N x C, each column contains unnormalized attention scores
+        # compute inner product of Q to each entry of q_max, A in shape N x C, each column contains unnormalized attention scores
+        A = torch.mm(Q, q_max.transpose(0, 1))
         A = F.softmax(A / torch.sqrt(torch.tensor(Q.shape[1], dtype=torch.float32, device=device)), 0)  # N x C,
         B = torch.mm(A.transpose(0, 1), V)  # compute bag representation, B in shape C x V
-        # print(f"B: {B.shape}")
         B = B.view(1, B.shape[0], B.shape[1])  # 1 x C x V
         # C = self.fcc(B)  # 1 x C x 1
-        # C = C.view(1, -1)
         return B, B.detach()
 
     def batch_forward(self, feats, c):

@@ -6,9 +6,9 @@ import json
 import glob
 import shutil
 import random
+import numpy as np
 from pathlib import Path
 
-import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 from sklearn.metrics import roc_auc_score, precision_recall_fscore_support
@@ -26,18 +26,6 @@ def init_seeds(seed=0):
     else:  # faster, less reproducible
         cudnn.deterministic = False
         cudnn.benchmark = True
-
-
-def setup_seed(seed):
-    torch.manual_seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-    torch.backends.cudnn.benchmark = False
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.enabled = True
 
 
 def check_file(file):
@@ -118,10 +106,6 @@ class CSVWriter:
 
 
 class AverageMeter(object):
-    """Computes and stores the average and current value
-       Imported from https://github.com/pytorch/examples/blob/master/imagenet/main.py#L247-L262
-    """
-
     def __init__(self):
         self.val = 0
         self.avg = 0
@@ -141,6 +125,35 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
+class BestVariable:
+    def __init__(self, order='max'):
+        self.order = order
+        if self.order == 'max':
+            self.best = float('-inf')
+        elif self.order == 'min':
+            self.best = float('inf')
+        else:
+            raise ValueError
+        self.epoch = 0
+
+    def reset(self):
+        if self.order == 'max':
+            self.best = float('-inf')
+        elif self.order == 'min':
+            self.best = float('inf')
+        else:
+            raise ValueError
+        self.epoch = 0
+
+    def compare(self, val, epoch=None, inplace=False):
+        flag = True if (self.order == 'max' and val > self.best) or (self.order == 'min' and val < self.best) else False
+        if flag and inplace:
+            self.best = val
+            if epoch is not None:
+                self.epoch = epoch
+        return flag
+
+
 def accuracy(output, target, topk=(1,)):
     """Computes the accuracy over the k top predictions for the specified values of k"""
     with torch.no_grad():
@@ -158,35 +171,6 @@ def accuracy(output, target, topk=(1,)):
         return res
 
 
-class BestVariable:
-    def __init__(self, order='max'):
-        self.order = order
-        if self.order == 'max':
-            self.best = float('-inf')
-        elif self.order == 'min':
-            self.best = float('inf')
-        else:
-            raise ValueError(f"")
-        self.epoch = 0
-
-    def reset(self):
-        if self.order == 'max':
-            self.best = float('-inf')
-        elif self.order == 'min':
-            self.best = float('inf')
-        else:
-            raise ValueError(f"")
-        self.epoch = 0
-
-    def compare(self, val, epoch=None, inplace=False):
-        flag = True if (self.order == 'max' and val > self.best) or (self.order == 'min' and val < self.best) else False
-        if flag and inplace:
-            self.best = val
-            if epoch is not None:
-                self.epoch = epoch
-        return flag
-
-
 def get_metrics(outputs, targets):
     with torch.no_grad():
         assert outputs.shape[0] == targets.shape[0]
@@ -198,8 +182,6 @@ def get_metrics(outputs, targets):
         _, preds = torch.max(outputs, dim=1)
         correct = preds.eq(targets)
         acc = (sum(correct) / bs).item()
-        # print(f"targets: {targets}")
-        # print(f"preds: {preds}")
 
         # AUC
         targets = np.asarray(targets.cpu().numpy(), dtype=int).reshape(-1)
