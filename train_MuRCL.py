@@ -36,7 +36,7 @@ def create_save_dir(args):
         f'as{args.action_std}',
         f'pg{args.ppo_gamma}',
         f'tau{args.temperature}',
-        f'alpha{args.temperature}',
+        f'alpha{args.alpha}',
     ]
     dir3 = '_'.join(murcl_setting)
     dir4 = args.arch
