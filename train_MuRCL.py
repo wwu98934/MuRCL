@@ -441,12 +441,12 @@ def main():
     parser.add_argument('--policy_hidden_dim', type=int, default=512)
     parser.add_argument('--policy_conv', action='store_true', default=False)
     parser.add_argument('--action_std', type=float, default=0.5)
-    parser.add_argument('--ppo_lr', type=float, default=0.0003)
+    parser.add_argument('--ppo_lr', type=float, default=0.00001)
     parser.add_argument('--ppo_gamma', type=float, default=0.1)
     parser.add_argument('--K_epochs', type=int, default=3)
     # Architecture - Full_layer
     parser.add_argument('--feature_num', type=int, default=512)
-    parser.add_argument('--fc_hidden_dim', type=int, default=512)
+    parser.add_argument('--fc_hidden_dim', type=int, default=1024)
     parser.add_argument('--fc_rnn', action='store_true', default=True)
     # Architecture - ABMIL
     parser.add_argument('--D', type=int, default=128)

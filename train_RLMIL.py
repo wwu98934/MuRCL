@@ -1120,7 +1120,7 @@ def main():
     parser.add_argument('--K_epochs', type=int, default=3)
     # Architecture - Full_layer
     parser.add_argument('--feature_num', type=int, default=512)
-    parser.add_argument('--fc_hidden_dim', type=int, default=512)
+    parser.add_argument('--fc_hidden_dim', type=int, default=1024)
     parser.add_argument('--fc_rnn', action='store_true', default=True)
     parser.add_argument('--load_fc', action='store_true', default=False)
     # Architecture - ABMIL
