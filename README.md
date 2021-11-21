@@ -137,11 +137,9 @@ sh fintune.sh
 sh linear.sh
 ```
 
-## Inference
-
 ## Visualization
 
-this code could create the attention heat-map mentioned in our paper.
+This code could create the attention heat-map mentioned in our paper.
 
 ```shell
 cd scripts
@@ -154,5 +152,6 @@ python create_heatmaps.py
 
 ## Training on your own datasets
 
-You can simply process your own dataset into a format acceptable to our code, see [WSI Processing](#WSI Processing) and [Data Organization](#Data Organization). Then modify the input parameters of the training script in the runs directory. 
+1. You can simply process your own dataset into a format acceptable to our code, see [WSI Processing](###WSI Processing) and [Data Organization](###Data Organization). 
+2. Then modify the input parameters of the training script in the runs directory. 
 
