@@ -72,11 +72,32 @@ dependencies:
 
 ### Download
 
-TODO
+> Camelyon16: https://camelyon16.grand-challenge.org/Download/
+>
+> TCGA: Use [GDC data portal](https://docs.gdc.cancer.gov/Data_Transfer_Tool/Users_Guide/Getting_Started/) with a manifest file and configuration file.
 
 ### WSI Processing
 
-TODO
+1. `cd wsi_processing`
+
+2. Tile all the WSI into patches
+
+   ```shell
+   python create_patches.py --slide_dir /dir/to/silde --save_dir /save/dir/patch --overview --save_mask --wsi_format .tif --overview_level 5
+   ```
+
+3. Feature extraction
+
+   ```shell
+   python extract_features.py --path_dir /dir/to/patch --image_encoder resnet18 --device 0
+   ```
+
+4. Clustering patch features
+
+   ```shell
+   python features_clustering.py --feat_dir /dir/to/patch/features --num_clusters 10
+   ```
+
 
 ### Data Organization
 
