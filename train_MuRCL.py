@@ -193,7 +193,7 @@ def train(args, train_set, model, fc, ppo, criterion, optimizer, scheduler, tb_w
     results_csv = CSVWriter(filename=save_dir / 'results.csv', header=['epoch', 'final_epoch', 'final_loss'])
     early_stop = EarlyStop(max_num_accordance=args.patience) if args.patience is not None else None
 
-    if args.train_stage == 2:  # stage-2 just training model and fc
+    if args.train_stage == 2:  # stage-2 just training RL module
         model.eval()
         fc.eval()
     else:
