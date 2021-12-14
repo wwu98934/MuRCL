@@ -1,6 +1,6 @@
 #!/bin/sh
 
-echo "fine-tune via train_RLMIL.py"
+echo "linear via train_RLMIL.py"
 for STAGE in 1 2; do
   python ../train_RLMIL.py \
     --dataset Camelyon16 \
