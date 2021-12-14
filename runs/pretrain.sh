@@ -2,7 +2,7 @@
 
 echo "pre-training via train_MuRCL.py"
 for STAGE in 1 2; do
-  python ./train_MuRCL.py \
+  python ../train_MuRCL.py \
     --dataset Camelyon16 \
     --data_csv path/to/data_csv.csv \
     --feat_size 1024 \
@@ -19,7 +19,7 @@ for STAGE in 1 2; do
     --device 3 \
     --exist_ok
 done
-python ./train_MuRCL.py \
+python ../train_MuRCL.py \
   --dataset Camelyon16 \
   --data_csv path/to/data_csv.csv \
   --feat_size 1024 \

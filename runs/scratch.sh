@@ -2,7 +2,7 @@
 
 echo "training from scratch via train_RLMIL.py"
 for STAGE in 1 2; do
-  python ./train_RLMIL.py \
+  python ../train_RLMIL.py \
     --dataset Camelyon16 \
     --data_csv path/to/data_csv.csv \
     --data_split_json path/to/data_split_json.json \
@@ -19,10 +19,11 @@ for STAGE in 1 2; do
     --fc_lr 0.00005 \
     --arch CLAM_SB \
     --device 3 \
+    --save_model \
     --exist_ok
 
 done
-python ./train_RLMIL.py \
+python ../train_RLMIL.py \
   --dataset Camelyon16 \
   --data_csv path/to/data_csv.csv \
   --data_split_json path/to/data_split_json.json \
@@ -39,4 +40,5 @@ python ./train_RLMIL.py \
   --fc_lr 0.00001 \
   --arch CLAM_SB \
   --device 3 \
+  --save_model \
   --exist_ok

@@ -158,7 +158,7 @@ class WSIWithCluster(WSIDataset):
         label = torch.tensor(label, dtype=torch.long)
         return patch_feature, cluster_indices, label, case_id
 
-    def load_cluster_indices(self) -> Dict[str: List[List[int]]]:
+    def load_cluster_indices(self) -> Dict[str, List[List[int]]]:
         cluster_indices = {}
         for case_id in self.indices:
             cluster_indices[case_id] = load_json(self.samples.at[case_id, 'clusters_json_filepath'])

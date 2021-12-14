@@ -107,7 +107,7 @@ def create_model(args, dim_patch):
             args.checkpoint = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
         assert Path(args.checkpoint).exists(), f"{args.checkpoint} is not exist!"
 
-        checkpoint = torch.load(args.checkpoint_path)
+        checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint['model_state_dict'])
         fc.load_state_dict(checkpoint['fc'])
 
@@ -122,9 +122,9 @@ def create_model(args, dim_patch):
         # if not specify the checkpoint path, use the default path produced from previous stage path.
         if args.checkpoint is None:
             args.checkpoint = str(Path(args.save_dir).parent / 'stage_2' / 'model_best.pth.tar')
-        assert Path(args.checkpoint_path).exists(), f'{str(args.checkpoint_path)} is not exists!'
+        assert Path(args.checkpoint).exists(), f'{str(args.checkpoint)} is not exists!'
 
-        checkpoint = torch.load(args.checkpoint_path)
+        checkpoint = torch.load(args.checkpoint)
         model.load_state_dict(checkpoint['model_state_dict'])
         fc.load_state_dict(checkpoint['fc'])
 

@@ -118,9 +118,9 @@ def create_model(args, dim_patch):
     if args.train_method in ['finetune', 'linear']:
         if args.train_stage == 1:
             assert args.checkpoint_pretrained is not None and Path(
-                args.checkpoint).exists(), f"{args.checkpoint} is not exists!"
+                args.checkpoint_pretrained).exists(), f"{args.checkpoint_pretrained} is not exists!"
 
-            checkpoint = torch.load(args.checkpoint)
+            checkpoint = torch.load(args.checkpoint_pretrained)
             model_state_dict = checkpoint['model_state_dict']
             # for k in list(model_state_dict.keys()):
             #     print(f"key: {k}")
@@ -199,9 +199,9 @@ def create_model(args, dim_patch):
         elif args.train_stage == 2:
             if args.checkpoint_stage is None:
                 args.checkpoint_stage = str(Path(args.save_dir).parent / 'stage_1' / 'model_best.pth.tar')
-            assert Path(args.checkpoint_path).exists(), f"{args.checkpoint_path} is not exist!"
+            assert Path(args.checkpoint_stage).exists(), f"{args.checkpoint_stage} is not exist!"
 
-            checkpoint = torch.load(args.checkpoint_path)
+            checkpoint = torch.load(args.checkpoint_stage)
             model.load_state_dict(checkpoint['model_state_dict'])
             fc.load_state_dict(checkpoint['fc'])
 
@@ -889,9 +889,9 @@ def train(args, train_set, valid_set, test_set, model, fc, ppo, memory, criterio
         train_loss, train_acc, train_auc, train_precision, train_recall, train_f1_score = \
             TRAIN[args.arch](args, epoch, train_set, model, fc, ppo, memory, criterion, optimizer, scheduler)
         valid_loss, valid_acc, valid_auc, valid_precision, valid_recall, valid_f1_score, *_ = \
-            TEST[args.arch](args, valid_set, model, fc, ppo, memory, criterion, mode='Valid')
+            TEST[args.arch](args, valid_set, model, fc, ppo, memory, criterion)
         test_loss, test_acc, test_auc, test_precision, test_recall, test_f1_score, *_ = \
-            TEST[args.arch](args, test_set, model, fc, ppo, memory, criterion, mode='Test ')
+            TEST[args.arch](args, test_set, model, fc, ppo, memory, criterion)
 
         # Write to tensorboard
         if tb_writer is not None:
@@ -1111,6 +1111,7 @@ def main():
     # Architecture
     parser.add_argument('--arch', default='CLAM_SB', type=str, choices=MODELS, help='model name')
     parser.add_argument('--num_classes', type=int, default=2)
+    parser.add_argument('--model_dim', type=int, default=512)
     # Architecture - PPO
     parser.add_argument('--policy_hidden_dim', type=int, default=512)
     parser.add_argument('--policy_conv', action='store_true', default=False)
