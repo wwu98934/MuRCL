@@ -10,7 +10,7 @@ from torch import optim
 from torch.utils.tensorboard import SummaryWriter
 
 from utils.datasets import WSIWithCluster, mixup, get_feats
-from utils.general import AverageMeter, CSVWriter, EarlyStop, increment_path, BestVariable, init_seeds, save_checkpoint
+from utils.general import AverageMeter, CSVWriter, EarlyStop, increment_path, BestVariable, init_seeds, save_checkpoint, load_json
 from models import rlmil, abmil, clam, cl
 from utils.losses import NT_Xent
 
@@ -56,8 +56,10 @@ def create_save_dir(args):
 
 
 def get_datasets(args):
+    indices = load_json(args.data_split_json)['train']
     train_set = WSIWithCluster(
         data_csv=args.data_csv,
+        indices=indices,
         shuffle=True,
         preload=args.preload,
     )
@@ -388,6 +390,7 @@ def main():
                         help="dataset name")
     parser.add_argument('--data_csv', type=str, default='',
                         help="the .csv filepath used")
+    parser.add_argument('--data_split_json', type=str, default='/path/to/data_split.json')
     parser.add_argument('--preload', action='store_true', default=False,
                         help="preload the patch features, default False")
     parser.add_argument('--data_repeat', type=int, default=10,

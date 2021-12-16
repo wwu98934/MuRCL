@@ -5,6 +5,7 @@ for STAGE in 1 2; do
   python ../train_MuRCL.py \
     --dataset Camelyon16 \
     --data_csv path/to/data_csv.csv \
+    --data_split_json path/to/data_split_json.json \
     --feat_size 1024 \
     --preload \
     --train_stage ${STAGE} \
@@ -22,6 +23,7 @@ done
 python ../train_MuRCL.py \
   --dataset Camelyon16 \
   --data_csv path/to/data_csv.csv \
+  --data_split_json path/to/data_split_json.json \
   --feat_size 1024 \
   --preload \
   --train_stage 3 \
